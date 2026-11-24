@@ -196,7 +196,7 @@ const val AUDIO_RATE = 48000
 /**
  * What actually runs in the container. GUI apps get, when installed:
  * - a window manager (matchbox-window-manager, or openbox, fluxbox or jwm where the system has
- *   no matchbox): one app per display, with the app's window on the screen;
+ *   no matchbox): one app per display, kept fullscreen, without title bars;
  * - a session D-Bus, which also carries the accessibility bus (AT-SPI);
  * - [FOCUS_WATCHER], which reports whether the focused widget takes text, so the window can
  *   show Android's keyboard for text fields the way a native app does;
@@ -369,6 +369,22 @@ else
       # With a cursor of its own on the screen: "-use_cursor no" blanks it, and apps that don't
       # set one (most outside GTK and Qt) then showed no pointer, even in the touchpad modes.
       matchbox-window-manager -use_titlebar no -use_cursor yes & wm_pid=${'$'}!
+    elif [ "${'$'}wm_cmd" = openbox ]; then
+      # Openbox's stock rc.xml decorates windows and leaves them floating; this session wants
+      # the app fullscreen and undecorated, as matchbox-window-manager gives it. The session's
+      # private /tmp keeps this file from other sessions.
+      cat > /tmp/tessera-openbox-rc.xml <<'OBEOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <applications>
+    <application class="*">
+      <decor>no</decor>
+      <maximized>yes</maximized>
+    </application>
+  </applications>
+</openbox_config>
+OBEOF
+      openbox --config-file /tmp/tessera-openbox-rc.xml & wm_pid=${'$'}!
     else
       "${'$'}wm_cmd" & wm_pid=${'$'}!
     fi

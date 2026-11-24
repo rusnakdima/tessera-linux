@@ -40,24 +40,20 @@ object ArchPackages {
 
     /**
      * [GUI_HELPER_PACKAGES]' Arch equivalents: Openbox in place of Debian's matchbox, and
-     * python-pygobject for the `gi` module the theme, notification and media daemons import
-     * (python3-gi on Debian).
+     * python-gobject for the `gi` module and python-atspi for `pyatspi` (python3-gi and
+     * python3-pyatspi on Debian).
      */
     val guiHelpers: List<String> = listOf(
-        "openbox", "dbus", "at-spi2-core", "python-pyatspi", "pulseaudio", "python-xlib",
-        "xsettingsd", "python-pygobject",
+        "openbox", "dbus", "at-spi2-core", "python-atspi", "pulseaudio", "python-xlib",
+        "xsettingsd", "python-gobject",
     )
 
     /**
-     * [THEME_COMPANIONS] keyed by Arch's packages: Qt's GTK platform theme and LibreOffice's
-     * GTK 3 front end, queued once their toolkit is installed rather than with every system.
+     * [THEME_COMPANIONS]' Arch equivalents: none. Arch's qt6-base and qt5-base already ship
+     * the GTK 3 platform theme plugin, and libreoffice-fresh and libreoffice-still ship
+     * libvclplug_gtk3lo.so; there is no separate companion package to queue.
      */
-    val themeCompanions: Map<String, String> = mapOf(
-        "qt6-base" to "qt6-gtk-platformtheme",
-        "qt5-base" to "qt5-gtk-platformtheme",
-        "libreoffice-fresh" to "libreoffice-gtk3",
-        "libreoffice-still" to "libreoffice-gtk3",
-    )
+    val themeCompanions: Map<String, String> = emptyMap()
 
     /** [DESKTOP_COMPANIONS]: what a desktop (xfwm4) needs beyond its window manager. */
     val desktopCompanions: Map<String, String> = mapOf(
