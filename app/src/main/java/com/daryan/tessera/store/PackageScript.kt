@@ -153,6 +153,9 @@ object PacmanScript : PackageScript {
      * clone and the build run as `user`; the base-devel install and `pacman -U` run as root.
      */
     private fun aurScript(job: QueueJob): String {
+        require(job.packages.size == 1) {
+            "An AUR install takes exactly one package, not ${job.packages.size}"
+        }
         val pkgbase = job.packages.single()
         val repo = shellQuote("https://aur.archlinux.org/$pkgbase.git")
         val dir = "$AUR_DIR/${shellQuote(pkgbase)}"

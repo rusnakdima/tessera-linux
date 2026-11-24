@@ -178,13 +178,16 @@ class InstallQueue(
         val session = Session(id = "q${job.id}")
         paths.sessionTmp(session).apply { deleteRecursively(); mkdirs() }
         paths.sessionShm(session).apply { deleteRecursively(); mkdirs() }
-        val manifest = PermissionManifest(
-            id = "queue-${job.id}",
-            name = job.title,
-            exec = listOf("/bin/sh", "-c", job.script ?: packageScript.script(job)),
-            permissions = Permissions(network = job.action == QueueAction.INSTALL, root = true),
-        )
         return try {
+            // Inside the try: a script that can't be built (an AUR job without exactly one
+            // package) fails the job rather than escaping run() and leaving it Running.
+            val script = job.script ?: scriptFor(job)
+            val manifest = PermissionManifest(
+                id = "queue-${job.id}",
+                name = job.title,
+                exec = listOf("/bin/sh", "-c", script),
+                permissions = Permissions(network = job.action == QueueAction.INSTALL, root = true),
+            )
             val spec = backend.buildLaunch(manifest, session)
             val pid = IntArray(1)
             // A pty, not a pipe: the chroot entry script needs a terminal for setsid -c.

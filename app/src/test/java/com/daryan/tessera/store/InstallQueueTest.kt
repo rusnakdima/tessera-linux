@@ -3,8 +3,14 @@
 
 package com.daryan.tessera.store
 
+import com.daryan.tessera.container.Capability
+import com.daryan.tessera.container.ContainerBackend
 import com.daryan.tessera.container.ContainerPaths
 import com.daryan.tessera.container.Distro
+import com.daryan.tessera.container.Enforcement
+import com.daryan.tessera.container.LaunchSpec
+import com.daryan.tessera.container.PermissionManifest
+import com.daryan.tessera.container.Session
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
@@ -134,6 +140,85 @@ class InstallQueueTest {
         } finally {
             bin.deleteRecursively()
         }
+    }
+
+    @Test fun `an AUR job without exactly one package fails instead of escaping run`() {
+        val dir = kotlin.io.path.createTempDirectory("queue-paths").toFile()
+        try {
+            val queue = InstallQueue(CoroutineScope(Dispatchers.Unconfined), pathsIn(dir), Distro.ARCH)
+            val backend = object : ContainerBackend {
+                override val name = "test"
+                override fun enforcement(capability: Capability, app: PermissionManifest) = Enforcement.ADVISORY
+                override fun buildLaunch(app: PermissionManifest, session: Session): LaunchSpec =
+                    throw AssertionError("a script that can't be built must fail before launching")
+            }
+            for (packages in listOf(emptyList<String>(), listOf("one", "two"))) {
+                queue.enqueue(
+                    title = "AUR", packages = packages, action = QueueAction.INSTALL,
+                    iconFile = null, backend = backend, aur = true,
+                ) { error("onDone must not run for a failed job") }
+            }
+            for ((index, count) in listOf(0 to 0, 1 to 2)) {
+                val job = awaitFinished(queue, index)
+                val state = job.state
+                assertTrue("$count packages: $state", state is JobState.Failed)
+                assertTrue(
+                    (state as JobState.Failed).message,
+                    "An AUR install takes exactly one package" in state.message,
+                )
+            }
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test fun `run launches the script that scriptFor selects`() {
+        val dir = kotlin.io.path.createTempDirectory("queue-paths").toFile()
+        try {
+            val queue = InstallQueue(CoroutineScope(Dispatchers.Unconfined), pathsIn(dir), Distro.ARCH)
+            val job = QueueJob(
+                id = 1, title = "Firefox", packages = listOf("firefox"),
+                action = QueueAction.INSTALL, iconFile = null,
+            )
+            val selected = queue.scriptFor(job)
+            assertTrue("pacman -S --noconfirm --needed firefox" in selected)
+            var launched: List<String>? = null
+            val backend = object : ContainerBackend {
+                override val name = "test"
+                override fun enforcement(capability: Capability, app: PermissionManifest) = Enforcement.ADVISORY
+                override fun buildLaunch(app: PermissionManifest, session: Session): LaunchSpec {
+                    launched = app.exec
+                    throw IllegalStateException("stop before the pty")
+                }
+            }
+            queue.enqueue(
+                title = job.title, packages = job.packages, action = job.action,
+                iconFile = job.iconFile, backend = backend,
+            ) { error("onDone must not run when the launch fails") }
+            val finished = awaitFinished(queue, 0)
+            assertTrue("${finished.state}", finished.state is JobState.Failed)
+            assertEquals(listOf("/bin/sh", "-c", selected), launched)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    private fun pathsIn(dir: java.io.File) = ContainerPaths(
+        nativeLibDir = java.io.File(dir, "native"),
+        filesDir = java.io.File(dir, "files"),
+        cacheDir = java.io.File(dir, "cache"),
+        prootRootfs = java.io.File(dir, "proot"),
+        chrootRootfs = java.io.File(dir, "chroot"),
+    )
+
+    /** Waits for the [index]th job to reach Done or Failed, failing the test if it never does. */
+    private fun awaitFinished(queue: InstallQueue, index: Int, timeoutMs: Long = 5_000): QueueJob {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            queue.jobs.value.getOrNull(index)?.takeUnless { it.active }?.let { return it }
+            Thread.sleep(10)
+        }
+        error("job $index never finished: ${queue.jobs.value.map { it.state }}")
     }
 
     /** Runs [script] with apt-cache knowing only [known] and apt-get echoing its arguments; its output. */
