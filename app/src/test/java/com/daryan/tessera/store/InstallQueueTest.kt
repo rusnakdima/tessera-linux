@@ -3,6 +3,10 @@
 
 package com.daryan.tessera.store
 
+import com.daryan.tessera.container.ContainerPaths
+import com.daryan.tessera.container.Distro
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -70,6 +74,46 @@ class InstallQueueTest {
         val job = QueueJob(1, "Libraries", listOf("libnope"), QueueAction.INSTALL, null, optional = setOf("libnope"))
         val out = runWithFakeApt(InstallQueue.script(job), "")
         assertTrue("apt-get install" !in out)
+    }
+
+    @Test fun `an Arch job runs pacman with the right flags and never apt`() {
+        assumeTrue(java.io.File("/bin/sh").canExecute())
+        val bin = kotlin.io.path.createTempDirectory("fake-pacman").toFile()
+        try {
+            // A pacman that records what it was asked, as the real one would receive it.
+            val recorded = java.io.File(bin, "args")
+            java.io.File(bin, "pacman").apply {
+                writeText("#!/bin/sh\nprintf '%s\\n' \"\$*\" > '${recorded.path}'\n")
+                setExecutable(true)
+            }
+            val paths = ContainerPaths(
+                nativeLibDir = java.io.File(bin, "native"),
+                filesDir = java.io.File(bin, "files"),
+                cacheDir = java.io.File(bin, "cache"),
+                prootRootfs = java.io.File(bin, "proot"),
+                chrootRootfs = java.io.File(bin, "chroot"),
+            )
+            val queue = InstallQueue(CoroutineScope(Dispatchers.Unconfined), paths, Distro.ARCH)
+            val job = QueueJob(
+                id = 1, title = "Firefox", packages = listOf("firefox"),
+                action = QueueAction.INSTALL, iconFile = null,
+            )
+            // The queue's selection, run the way run() runs it; the PTY path is unchanged.
+            val script = queue.scriptFor(job)
+            assertTrue("apt-get" !in script)
+            val pb = ProcessBuilder("/bin/sh", "-c", script).redirectErrorStream(true)
+            pb.environment()["PATH"] = bin.path + ":" + (System.getenv("PATH") ?: "/usr/bin:/bin")
+            val p = pb.start()
+            val out = p.inputStream.bufferedReader().readText()
+            assertEquals(out, 0, p.waitFor())
+            val args = recorded.readText().trim()
+            assertTrue(args, "-S --noconfirm --needed" in args)
+            assertTrue(args, "firefox" in args)
+            // The same queue on Debian still selects apt.
+            assertTrue("apt-get" in InstallQueue(CoroutineScope(Dispatchers.Unconfined), paths).scriptFor(job))
+        } finally {
+            bin.deleteRecursively()
+        }
     }
 
     /** Runs [script] with apt-cache knowing only [known] and apt-get echoing its arguments; its output. */

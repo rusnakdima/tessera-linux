@@ -6,6 +6,7 @@ package com.daryan.tessera.store
 import android.os.ParcelFileDescriptor
 import com.daryan.tessera.container.ContainerBackend
 import com.daryan.tessera.container.ContainerPaths
+import com.daryan.tessera.container.Distro
 import com.daryan.tessera.container.PermissionManifest
 import com.daryan.tessera.container.Permissions
 import com.daryan.tessera.container.Pty
@@ -39,11 +40,11 @@ data class QueueJob(
     val action: QueueAction,
     val iconFile: String?,
     val state: JobState = JobState.Queued,
-    /** apt's output, minus the progress lines. */
+    /** The package manager's output, minus the progress lines. */
     val log: String = "",
     val queuedAt: Long = System.currentTimeMillis(),
     val finishedAt: Long? = null,
-    /** What runs instead of apt (Flathub's setup, flatpak install), as root; its last line is the progress text. */
+    /** What runs instead of the package manager (Flathub's setup, flatpak install), as root; its last line is the progress text. */
     val script: String? = null,
     /** The Flathub id a flatpak install [script] installs, whose progress [FlatpakProgress] reads. */
     val flatpakApp: String? = null,
@@ -55,19 +56,30 @@ data class QueueJob(
     val optional: Set<String> = emptySet(),
     /**
      * When the system's own sources have no package for some of [packages], add Debian 13's
-     * ([FALLBACK_SOURCE]) at a low priority first, so those come from it: for derivatives that
-     * dropped what Tessera needs (Kali, following Debian testing, has no libfuse2t64).
+     * ([InstallQueue.FALLBACK_SOURCE]) at a low priority first, so those come from it: for
+     * derivatives that dropped what Tessera needs (Kali, following Debian testing, has no
+     * libfuse2t64).
      */
     val fallback: Boolean = false,
+    /**
+     * An Arch AUR package: built as `user` with makepkg (base-devel and git), then installed as
+     * root with `pacman -U`. Only Arch uses it; Debian ignores it.
+     */
+    val aur: Boolean = false,
 ) {
     val active get() = state is JobState.Queued || state is JobState.Running
 }
 
 /**
- * Installs and removals, one at a time and out of sight: apt runs as root in the active
- * container and reports progress through APT::Status-Fd, which drives the bar in the launcher.
+ * Installs and removals, one at a time and out of sight: the distro's package manager runs as
+ * root in the active container and reports progress, which drives the bar in the launcher.
+ * Debian's apt reports through APT::Status-Fd; Arch's pacman has no such channel.
  */
-class InstallQueue(private val scope: CoroutineScope, private val paths: ContainerPaths) {
+class InstallQueue(
+    private val scope: CoroutineScope,
+    private val paths: ContainerPaths,
+    private val distro: Distro = Distro.DEBIAN,
+) {
     private val nextId = AtomicInteger(1)
     private val _jobs = MutableStateFlow<List<QueueJob>>(emptyList())
     val jobs: StateFlow<List<QueueJob>> = _jobs
@@ -79,8 +91,9 @@ class InstallQueue(private val scope: CoroutineScope, private val paths: Contain
     private val reruns = java.util.concurrent.ConcurrentHashMap<Int, Pair<ContainerBackend, suspend () -> Unit>>()
 
     /**
-     * Queues [packages] for [action] with [backend]; [onDone] runs after apt succeeds (adding or
-     * removing the launcher entry). Ignored if the same packages are already waiting.
+     * Queues [packages] for [action] with [backend]; [onDone] runs after the package manager
+     * succeeds (adding or removing the launcher entry). Ignored if the same packages are already
+     * waiting. [aur] marks an Arch AUR package, built with makepkg before its install.
      */
     fun enqueue(
         title: String,
@@ -92,12 +105,14 @@ class InstallQueue(private val scope: CoroutineScope, private val paths: Contain
         flatpakApp: String? = null,
         optional: Set<String> = emptySet(),
         fallback: Boolean = false,
+        aur: Boolean = false,
         onDone: suspend () -> Unit,
     ) {
         if (_jobs.value.any { it.active && it.packages == packages }) return
         val job = QueueJob(
             nextId.getAndIncrement(), title, packages, action, iconFile,
             script = script, flatpakApp = flatpakApp, optional = optional, fallback = fallback,
+            aur = aur,
         )
         reruns[job.id] = backend to onDone
         _jobs.update { it + job }
@@ -133,18 +148,26 @@ class InstallQueue(private val scope: CoroutineScope, private val paths: Contain
         val job = _jobs.value.firstOrNull { it.id == id && it.state is JobState.Failed } ?: return
         val (backend, onDone) = reruns.remove(id) ?: return
         _jobs.update { list -> list.filterNot { it.id == id } }
-        enqueue(job.title, job.packages, job.action, job.iconFile, backend, job.script, job.flatpakApp, job.optional, job.fallback, onDone)
+        enqueue(
+            title = job.title, packages = job.packages, action = job.action, iconFile = job.iconFile,
+            backend = backend, script = job.script, flatpakApp = job.flatpakApp,
+            optional = job.optional, fallback = job.fallback, aur = job.aur, onDone = onDone,
+        )
     }
+
+    /** The package manager's script for [job] in this queue's distro; what [run] executes. */
+    internal fun scriptFor(job: QueueJob): String = PackageScript.forDistro(distro).script(job)
 
     private fun run(job: QueueJob, backend: ContainerBackend): Boolean {
         set(job.id, JobState.Running(null, "Starting"))
+        val packageScript = PackageScript.forDistro(distro)
         val session = Session(id = "q${job.id}")
         paths.sessionTmp(session).apply { deleteRecursively(); mkdirs() }
         paths.sessionShm(session).apply { deleteRecursively(); mkdirs() }
         val manifest = PermissionManifest(
             id = "queue-${job.id}",
             name = job.title,
-            exec = listOf("/bin/sh", "-c", job.script ?: script(job)),
+            exec = listOf("/bin/sh", "-c", job.script ?: packageScript.script(job)),
             permissions = Permissions(network = job.action == QueueAction.INSTALL, root = true),
         )
         return try {
@@ -154,7 +177,6 @@ class InstallQueue(private val scope: CoroutineScope, private val paths: Contain
             val fd = Pty.spawn(spec, rows = 24, cols = 200, pidOut = pid)
             stopRequested = false
             runningPid = pid[0]
-            val parser = AptProgress()
             val flatpak = job.flatpakApp?.let(::FlatpakProgress)
             val tail = ArrayDeque<String>()
             val log = StringBuilder()
@@ -167,7 +189,9 @@ class InstallQueue(private val scope: CoroutineScope, private val paths: Contain
                     terminalLines(r) { runCatching { answer.write(CURSOR_REPORT) } }.forEach { raw ->
                         // Without terminal colors: flatpak colors its errors even on a pipe.
                         val line = raw.trimEnd('\r').replace(ANSI, "")
-                        if (job.script == null) parser.feed(line)?.let { (p, msg) -> state = JobState.Running(p, msg) }
+                        if (job.script == null) packageScript.parseProgress(line)?.let { (percent, msg) ->
+                            state = JobState.Running(percent?.div(100f), msg)
+                        }
                         else if (flatpak != null) flatpak.feed(line)?.let { (p, msg) -> state = JobState.Running(p, msg) }
                         // Other tools' progress isn't machine-readable: their latest line says it.
                         else if (line.isNotBlank()) state = JobState.Running(null, line.trim().take(120))
@@ -196,10 +220,7 @@ class InstallQueue(private val scope: CoroutineScope, private val paths: Contain
             } else {
                 val why = when {
                     code < 0 -> ended(-code, stopRequested)
-                    else -> tail.lastOrNull { it.startsWith("E:") }
-                        // flatpak's own words, not the table row drawn before them.
-                        ?: tail.lastOrNull { "error: " in it }?.let { it.substring(it.indexOf("error: ")) }
-                        ?: tail.lastOrNull() ?: "apt failed ($code)"
+                    else -> packageScript.failure(tail.toList(), code)
                 }
                 set(job.id, JobState.Failed(why), log)
                 false
@@ -244,75 +265,9 @@ class InstallQueue(private val scope: CoroutineScope, private val paths: Contain
         /** Where [QueueJob.fallback] puts Debian 13's sources, and its pin. */
         const val FALLBACK_SOURCE = "/etc/apt/sources.list.d/tessera-debian.sources"
         const val FALLBACK_PIN = "/etc/apt/preferences.d/tessera-debian"
-        private const val DEBIAN_KEYRING = "/usr/share/keyrings/debian-archive-keyring.gpg"
 
-        private val FALLBACK_SOURCES = """
-            Types: deb
-            URIs: http://deb.debian.org/debian
-            Suites: trixie trixie-updates
-            Components: main
-            Signed-By: $DEBIAN_KEYRING
-        """.trimIndent()
-
-        /**
-         * Below 100: a package comes from Debian only when the system has none of its own, and
-         * what's installed is never "upgraded" to Debian's.
-         */
-        private val FALLBACK_PREFERENCES = """
-            Explanation: Tessera: Debian 13 only for what this system has no package for
-            Package: *
-            Pin: origin deb.debian.org
-            Pin-Priority: 50
-        """.trimIndent()
-
-        /** apt in two phases with machine-readable progress; markers tell [AptProgress] which. */
-        fun script(job: QueueJob): String {
-            val opts = "-o APT::Status-Fd=1 -o Dpkg::Use-Pty=0 -o Dpkg::Progress-Fancy=0"
-            val install = job.action == QueueAction.INSTALL
-            val pick = install && (job.optional.isNotEmpty() || job.fallback || job.packages.any { '|' in it })
-            val pkgs = if (pick) "\$pkgs" else job.packages.joinToString(" ")
-            fun list(l: List<String>) = l.joinToString(" ") { com.daryan.tessera.container.shellQuote(it) }
-            // A package the lists can install: a candidate, not just a name something refers to
-            // (apt-cache show succeeds for those; Kali's libfuse2 is one).
-            val helpers = if (!pick) "" else
-                "has() { LC_ALL=C apt-cache policy \"\$1\" 2>/dev/null | grep -q '^ *Candidate: [^(]'; }; " +
-                    "pick() { for a in \$(printf '%s' \"\$1\" | tr '|' ' '); do " +
-                    "if has \"\$a\"; then echo \"\$a\"; return 0; fi; done; return 1; }; "
-            // Debian 13's sources for what the system lacks, once; taken out again if they can't
-            // be read, so a failed download doesn't break the system's apt.
-            val fallback = if (!pick || !job.fallback) "" else
-                "lack=; for p in ${list(job.packages)}; do pick \"\$p\" >/dev/null || lack=\"\$lack \${p%%|*}\"; done; " +
-                    "if [ -n \"\$lack\" ] && [ ! -e $FALLBACK_SOURCE ]; then " +
-                    "echo \"Not in this system's sources:\$lack. Adding Debian 13's for them\"; " +
-                    "[ -e $DEBIAN_KEYRING ] || apt-get install -y --no-install-recommends $opts debian-archive-keyring; " +
-                    "if [ -e $DEBIAN_KEYRING ]; then " +
-                    "printf '%s\n' ${com.daryan.tessera.container.shellQuote(FALLBACK_SOURCES)} > $FALLBACK_SOURCE; " +
-                    "mkdir -p ${FALLBACK_PIN.substringBeforeLast('/')}; " +
-                    "printf '%s\n' ${com.daryan.tessera.container.shellQuote(FALLBACK_PREFERENCES)} > $FALLBACK_PIN; " +
-                    "apt-get update $opts || { echo \"Couldn't read Debian's sources; going on without them\"; " +
-                    "rm -f $FALLBACK_SOURCE $FALLBACK_PIN; apt-get update $opts; }; " +
-                    "else echo \"Debian's keyring isn't here, so its sources can't be added\"; fi; fi; "
-            // After apt-get update, so the lists it checks are current. A required package the
-            // lists lack goes to apt as named, which then says so.
-            val filter = if (!pick) "" else {
-                val (optional, required) = job.packages.partition { it in job.optional }
-                "pkgs=; " +
-                    (if (required.isEmpty()) "" else "for p in ${list(required)}; do a=\$(pick \"\$p\") || a=\${p%%|*}; pkgs=\"\$pkgs \$a\"; done; ") +
-                    (if (optional.isEmpty()) "" else "for p in ${list(optional)}; do if a=\$(pick \"\$p\"); then pkgs=\"\$pkgs \$a\"; " +
-                        "else echo \"Skipping \$p: this system has no such package\"; fi; done; ") +
-                    "[ -n \"\$pkgs\" ] || exit 0; "
-            }
-            val main = when (job.action) {
-                QueueAction.INSTALL -> "apt-get install -y --no-install-recommends $opts $pkgs"
-                QueueAction.REMOVE -> "apt-get remove -y $opts $pkgs"
-            }
-            // A package setup step that was interrupted (or stumbled) leaves dpkg half done and
-            // apt failing; finish what's pending and try once more before calling it failed.
-            val retry = "{ echo 'Finishing interrupted package setup and trying again'; dpkg --configure -a; $main; }"
-            return "export DEBIAN_FRONTEND=noninteractive; " +
-                (if (install) "echo '##phase update'; apt-get update $opts || exit \$?; " else "") +
-                helpers + fallback + filter + "echo '##phase main'; $main || $retry"
-        }
+        /** Debian's apt script; kept here for callers that predate [PackageScript]. */
+        fun script(job: QueueJob): String = AptScript.script(job)
     }
 }
 
