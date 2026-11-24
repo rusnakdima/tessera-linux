@@ -5,7 +5,6 @@ package com.daryan.tessera.store
 
 import com.daryan.tessera.container.Distro
 import com.daryan.tessera.container.shellQuote
-import kotlin.math.roundToInt
 
 /**
  * How one package manager runs a [QueueJob] and reads its output. [InstallQueue] picks the
@@ -17,10 +16,10 @@ interface PackageScript {
 
     /**
      * Progress and a short message for one line of output, or null if it says nothing new.
-     * The percent is 0..100 when the tool reports one. An implementation may keep the little
+     * The progress is 0..1 when the tool reports one. An implementation may keep the little
      * state its lines need: [InstallQueue] runs one job at a time, so lines arrive in order.
      */
-    fun parseProgress(line: String): Pair<Int?, String>?
+    fun parseProgress(line: String): Pair<Float?, String>?
 
     /** Why a job that ended with [code] failed, from its last [lines] of output. */
     fun failure(lines: List<String>, code: Int): String
@@ -43,10 +42,7 @@ object AptScript : PackageScript {
     private val progress = AptProgress()
 
     @Synchronized
-    override fun parseProgress(line: String): Pair<Int?, String>? =
-        progress.feed(line)?.let { (fraction, message) ->
-            fraction?.let { (it * 100).roundToInt().coerceIn(0, 100) } to message
-        }
+    override fun parseProgress(line: String): Pair<Float?, String>? = progress.feed(line)
 
     override fun failure(lines: List<String>, code: Int): String =
         lines.lastOrNull { it.startsWith("E:") }
@@ -141,9 +137,8 @@ object PacmanScript : PackageScript {
         else -> "pacman -Rns --noconfirm " + quote(job.packages)
     }
 
-    /** Pacman prints no percentage; its latest line is the progress text. */
-    override fun parseProgress(line: String): Pair<Int?, String>? =
-        if (line.isBlank()) null else null to line.trim().take(120)
+    /** Pacman prints no percentage: [InstallQueue] shows its latest line as the progress text. */
+    override fun parseProgress(line: String): Pair<Float?, String>? = null
 
     override fun failure(lines: List<String>, code: Int): String =
         lines.lastOrNull { "==> ERROR:" in it }

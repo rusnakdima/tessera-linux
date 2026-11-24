@@ -158,6 +158,20 @@ class InstallQueue(
     /** The package manager's script for [job] in this queue's distro; what [run] executes. */
     internal fun scriptFor(job: QueueJob): String = PackageScript.forDistro(distro).script(job)
 
+    /**
+     * The running state [line] reports for [job], or null if it says nothing new. Debian's apt
+     * reports fractions of the whole job; pacman has no machine-readable progress, so its latest
+     * line is the message, with no percentage.
+     */
+    internal fun progressState(job: QueueJob, line: String): JobState.Running? {
+        if (job.script != null) return null
+        PackageScript.forDistro(distro).parseProgress(line)?.let { (progress, message) ->
+            return JobState.Running(progress, message)
+        }
+        if (distro == Distro.DEBIAN || line.isBlank()) return null
+        return JobState.Running(null, line.trim().take(120))
+    }
+
     private fun run(job: QueueJob, backend: ContainerBackend): Boolean {
         set(job.id, JobState.Running(null, "Starting"))
         val packageScript = PackageScript.forDistro(distro)
@@ -189,9 +203,7 @@ class InstallQueue(
                     terminalLines(r) { runCatching { answer.write(CURSOR_REPORT) } }.forEach { raw ->
                         // Without terminal colors: flatpak colors its errors even on a pipe.
                         val line = raw.trimEnd('\r').replace(ANSI, "")
-                        if (job.script == null) packageScript.parseProgress(line)?.let { (percent, msg) ->
-                            state = JobState.Running(percent?.div(100f), msg)
-                        }
+                        if (job.script == null) progressState(job, line)?.let { state = it }
                         else if (flatpak != null) flatpak.feed(line)?.let { (p, msg) -> state = JobState.Running(p, msg) }
                         // Other tools' progress isn't machine-readable: their latest line says it.
                         else if (line.isNotBlank()) state = JobState.Running(null, line.trim().take(120))

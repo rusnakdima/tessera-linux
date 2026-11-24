@@ -30,6 +30,26 @@ class InstallQueueTest {
         assertNull(p.feed("Get:1 http://deb.debian.org/debian trixie/main arm64 vlc 3.0.21"))
     }
 
+    @Test fun `apt progress keeps its fractional percentage`() {
+        val paths = ContainerPaths(
+            nativeLibDir = java.io.File("native"),
+            filesDir = java.io.File("files"),
+            cacheDir = java.io.File("cache"),
+            prootRootfs = java.io.File("proot"),
+            chrootRootfs = java.io.File("chroot"),
+        )
+        val queue = InstallQueue(CoroutineScope(Dispatchers.Unconfined), paths)
+        val job = QueueJob(
+            id = 1, title = "VLC", packages = listOf("vlc"),
+            action = QueueAction.INSTALL, iconFile = null,
+        )
+        // The phase marker resets AptProgress; 33.5% of the download phase is 0.25075 of the job.
+        assertEquals(0.1f, queue.progressState(job, "##phase main")!!.progress!!, 0.00001f)
+        val running = queue.progressState(job, "dlstatus:1:33.5:Retrieving file 1 of 3")!!
+        assertEquals(0.25075f, running.progress!!, 0.00001f)
+        assertEquals("Retrieving file 1 of 3", running.message)
+    }
+
     @Test fun `install script refreshes lists first and reports through status-fd`() {
         val job = QueueJob(1, "VLC", listOf("vlc", "matchbox-window-manager"), QueueAction.INSTALL, null)
         val s = InstallQueue.script(job)
