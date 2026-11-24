@@ -195,7 +195,8 @@ const val AUDIO_RATE = 48000
 
 /**
  * What actually runs in the container. GUI apps get, when installed:
- * - matchbox-window-manager: one app per display, kept fullscreen, without title bars;
+ * - a window manager (matchbox-window-manager, or openbox, fluxbox or jwm where the system has
+ *   no matchbox): one app per display, with the app's window on the screen;
  * - a session D-Bus, which also carries the accessibility bus (AT-SPI);
  * - [FOCUS_WATCHER], which reports whether the focused widget takes text, so the window can
  *   show Android's keyboard for text fields the way a native app does;
@@ -210,8 +211,8 @@ const val AUDIO_RATE = 48000
  * - with [Session.composite], a compositor (picom, drawing with XRender: no GL needed), so
  *   windows with see-through parts are drawn over what's behind them rather than over black.
  * The helpers are stopped when the app exits so the session (and its window) ends with it.
- * A desktop ([PermissionManifest.desktop]) gets the same helpers but no matchbox: its own
- * window manager runs in [DESKTOP_SESSION], next to [DESKTOP_HELPER].
+ * A desktop ([PermissionManifest.desktop]) gets the same helpers but no window manager of its
+ * own: its own runs in [DESKTOP_SESSION], next to [DESKTOP_HELPER].
  */
 internal fun guestCommand(app: PermissionManifest): List<String> = when {
     !app.gui -> app.exec
@@ -219,11 +220,11 @@ internal fun guestCommand(app: PermissionManifest): List<String> = when {
     else -> guiWrapper("app") + app.exec
 }
 
-/** [GUI_WRAPPER] and its helpers; [wm] is "app" (matchbox keeps it fullscreen) or "desktop". */
+/** [GUI_WRAPPER] and its helpers; [wm] is "app" (a window manager takes the display) or "desktop". */
 private fun guiWrapper(wm: String) =
     listOf("/bin/sh", "-c", GUI_WRAPPER, "launch", FOCUS_WATCHER, FOCUS_FILE_GUEST, WINDOW_WATCHER, WINDOWS_FILE_GUEST, THEME_DAEMON, wm, NOTIFY_DAEMON, MEDIA_DAEMON)
 
-private const val GUI_WRAPPER = """
+internal const val GUI_WRAPPER = """
 watcher=${'$'}1; out=${'$'}2; windows=${'$'}3; windows_out=${'$'}4; theme=${'$'}5; wm_mode=${'$'}6; notify=${'$'}7; media=${'$'}8; wm_pid=; cm=; shift 8
 # The phone's time zone and language (GuestLocale). Without tzdata (Debian's slim image) glibc
 # reads a zone name as UTC, so the same rules as a POSIX string. The language only when the
@@ -240,7 +241,7 @@ if { [ -n "${'$'}TESSERA_FLATPAK" ] || [ "${'$'}wm_mode" = desktop ]; } && [ -z 
 elif [ -z "${'$'}DBUS_SESSION_BUS_ADDRESS" ] && command -v dbus-launch >/dev/null 2>&1; then
   eval "${'$'}(dbus-launch --sh-syntax)"; bus=${'$'}DBUS_SESSION_BUS_PID
 fi
-if [ -n "${'$'}TESSERA_THEME" ] && [ -n "${'$'}DBUS_SESSION_BUS_ADDRESS" ] && [ -d /usr/lib/python3/dist-packages/gi ]; then
+if [ -n "${'$'}TESSERA_THEME" ] && [ -n "${'$'}DBUS_SESSION_BUS_ADDRESS" ] && python3 -c 'import gi' >/dev/null 2>&1; then
   python3 -c "${'$'}theme" "${'$'}TESSERA_THEME" & td=${'$'}!
   # The app reads its theme as it starts, and libadwaita only listens to a portal it found
   # then. A cold start of Python with GLib can take seconds.
@@ -249,9 +250,13 @@ if [ -n "${'$'}TESSERA_THEME" ] && [ -n "${'$'}DBUS_SESSION_BUS_ADDRESS" ] && [ 
 fi
 if [ -n "${'$'}TESSERA_THEME" ]; then
   # Qt: GTK's (themed) colors through its GTK platform theme where installed, else at least
-  # light or dark from the settings portal. LibreOffice: its GTK 3 look rather than the bare X one.
+  # light or dark from the settings portal. Debian keeps the plugin under a multiarch triplet;
+  # Arch's qt6-base and qt5-base have it directly under /usr/lib. The glob is a convenience,
+  # not a requirement: without it the portal still follows light and dark.
+  # LibreOffice: its GTK 3 look rather than the bare X one.
   if [ -z "${'$'}QT_QPA_PLATFORMTHEME" ]; then
-    if ls /usr/lib/*/qt6/plugins/platformthemes/libqgtk3.so /usr/lib/*/qt5/plugins/platformthemes/libqgtk3.so >/dev/null 2>&1; then
+    if ls /usr/lib/*/qt6/plugins/platformthemes/libqgtk3.so /usr/lib/qt6/plugins/platformthemes/libqgtk3.so \
+         /usr/lib/*/qt5/plugins/platformthemes/libqgtk3.so /usr/lib/qt/plugins/platformthemes/libqgtk3.so >/dev/null 2>&1; then
       export QT_QPA_PLATFORMTHEME=gtk3
     else
       export QT_QPA_PLATFORMTHEME=xdgdesktopportal
@@ -280,14 +285,14 @@ for p in "${'$'}HOME"/.mozilla/firefox/*/ "${'$'}HOME"/.mozilla/firefox-esr/*/ "
     echo '// } tessera-gpu'
   } > "${'$'}u.tessera" && mv "${'$'}u.tessera" "${'$'}u"
 done
-if [ -n "${'$'}DBUS_SESSION_BUS_ADDRESS" ] && [ -d /usr/lib/python3/dist-packages/gi ]; then
+if [ -n "${'$'}DBUS_SESSION_BUS_ADDRESS" ] && python3 -c 'import gi' >/dev/null 2>&1; then
   python3 -c "${'$'}notify" /tmp/.X11-unix & nd=${'$'}!
 fi
 # What the app's players are playing, for the phone's media controls: only where there's sound.
-if [ -n "${'$'}LAUNCHER_AUDIO" ] && [ -n "${'$'}DBUS_SESSION_BUS_ADDRESS" ] && [ -d /usr/lib/python3/dist-packages/gi ]; then
+if [ -n "${'$'}LAUNCHER_AUDIO" ] && [ -n "${'$'}DBUS_SESSION_BUS_ADDRESS" ] && python3 -c 'import gi' >/dev/null 2>&1; then
   python3 -c "${'$'}media" /tmp/.X11-unix & md=${'$'}!
 fi
-if [ -n "${'$'}DBUS_SESSION_BUS_ADDRESS" ] && [ -d /usr/lib/python3/dist-packages/pyatspi ]; then
+if [ -n "${'$'}DBUS_SESSION_BUS_ADDRESS" ] && python3 -c 'import pyatspi' >/dev/null 2>&1; then
   python3 -c "${'$'}watcher" "${'$'}out" & fw=${'$'}!
 fi
 if [ -n "${'$'}LAUNCHER_AUDIO" ] && command -v pulseaudio >/dev/null 2>&1; then
@@ -345,26 +350,42 @@ fi
 if [ "${'$'}wm_mode" = desktop ]; then
   # The desktop's own window manager starts with it, below; the watcher follows its windows
   # for the taskbar once it owns the screen.
-  if [ -d /usr/lib/python3/dist-packages/Xlib ]; then
+  if python3 -c 'import Xlib' >/dev/null 2>&1; then
     ( sleep 1.5; exec python3 -c "${'$'}windows" "${'$'}windows_out" ) & ww=${'$'}!
   fi
-elif command -v matchbox-window-manager >/dev/null 2>&1; then
-  # With a cursor of its own on the screen: "-use_cursor no" blanks it, and apps that don't
-  # set one (most outside GTK and Qt) then showed no pointer, even in the touchpad modes.
-  matchbox-window-manager -use_titlebar no -use_cursor yes & wm_pid=${'$'}!
-  if [ -n "${'$'}TESSERA_COMPOSITE" ]; then
-    # No shadows or fading (picom's defaults without a config): only what transparency needs.
-    if command -v picom >/dev/null 2>&1; then
-      picom --config /dev/null --backend xrender >/dev/null 2>&1 & cm=${'$'}!
-    elif command -v xcompmgr >/dev/null 2>&1; then
-      xcompmgr >/dev/null 2>&1 & cm=${'$'}!
-    else
-      echo "Compositing is on for this app, but picom isn't installed (apt install picom)" >&2
-    fi
+else
+  # Debian's slim image has matchbox; Arch Linux ARM has no matchbox-window-manager in its
+  # repos (it's AUR-only), so take the first lightweight manager it does have, Openbox being
+  # the one its GUI helpers install. A desktop above runs its own manager instead.
+  wm_cmd=
+  for c in openbox fluxbox jwm; do
+    if command -v "${'$'}c" >/dev/null 2>&1; then wm_cmd=${'$'}c; break; fi
+  done
+  if [ -z "${'$'}wm_cmd" ] && command -v matchbox-window-manager >/dev/null 2>&1; then
+    wm_cmd=matchbox-window-manager
   fi
-  if [ -d /usr/lib/python3/dist-packages/Xlib ]; then
-    # Once the manager owns the screen, or the window list it keeps isn't there yet.
-    ( sleep 0.5; exec python3 -c "${'$'}windows" "${'$'}windows_out" ) & ww=${'$'}!
+  if [ -n "${'$'}wm_cmd" ]; then
+    if [ "${'$'}wm_cmd" = matchbox-window-manager ]; then
+      # With a cursor of its own on the screen: "-use_cursor no" blanks it, and apps that don't
+      # set one (most outside GTK and Qt) then showed no pointer, even in the touchpad modes.
+      matchbox-window-manager -use_titlebar no -use_cursor yes & wm_pid=${'$'}!
+    else
+      "${'$'}wm_cmd" & wm_pid=${'$'}!
+    fi
+    if [ -n "${'$'}TESSERA_COMPOSITE" ]; then
+      # No shadows or fading (picom's defaults without a config): only what transparency needs.
+      if command -v picom >/dev/null 2>&1; then
+        picom --config /dev/null --backend xrender >/dev/null 2>&1 & cm=${'$'}!
+      elif command -v xcompmgr >/dev/null 2>&1; then
+        xcompmgr >/dev/null 2>&1 & cm=${'$'}!
+      else
+        echo "Compositing is on for this app, but picom isn't installed (install picom)" >&2
+      fi
+    fi
+    if python3 -c 'import Xlib' >/dev/null 2>&1; then
+      # Once the manager owns the screen, or the window list it keeps isn't there yet.
+      ( sleep 0.5; exec python3 -c "${'$'}windows" "${'$'}windows_out" ) & ww=${'$'}!
+    fi
   fi
 fi
 started=${'$'}(date +%s)
