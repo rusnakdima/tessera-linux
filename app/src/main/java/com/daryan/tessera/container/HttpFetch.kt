@@ -17,7 +17,7 @@ import java.net.URL
  * Agent, redirect-following, error-honouring, and resumable streaming into a partial file.
  */
 object HttpFetch {
-    const val USER_AGENT = "Tessera/1.0"
+    const val USER_AGENT = OciRegistry.USER_AGENT
 
     fun text(url: String): String {
         val conn = open(url)

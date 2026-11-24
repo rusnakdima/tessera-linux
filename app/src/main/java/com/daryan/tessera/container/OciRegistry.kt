@@ -118,12 +118,14 @@ class OciRegistry(
         (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 20_000
             readTimeout = 60_000
+            setRequestProperty("User-Agent", USER_AGENT)
             token?.let { setRequestProperty("Authorization", "Bearer $it") }
             accept?.let { setRequestProperty("Accept", it) }
         }
 
     companion object {
         const val REGISTRY_URL = "https://registry-1.docker.io"
+        const val USER_AGENT = "Tessera/1.0"
         private val json = Json { ignoreUnknownKeys = true }
         private const val MANIFEST_TYPES =
             "application/vnd.oci.image.index.v1+json, " +
