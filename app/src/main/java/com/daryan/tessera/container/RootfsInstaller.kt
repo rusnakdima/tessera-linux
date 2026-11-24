@@ -93,7 +93,7 @@ class RootfsInstaller(
         val (artifact, tarball) = fetch(distro)
         _state.value = InstallState.Extracting
         val script = File(paths.cacheDir, "chroot-install.sh")
-        script.writeText(ChrootSetup.script(paths.chrootRootfs.path, tarball.path, "${distro.name} ${artifact.key}"))
+        script.writeText(ChrootSetup.script(paths.chrootRootfs.path, tarball.path, "${distro.name} ${artifact.key}", distro))
         runInterruptible {
             val proc = ProcessBuilder(su, "-c", "/system/bin/sh ${script.path}").redirectErrorStream(true).start()
             try {
@@ -120,13 +120,15 @@ class RootfsInstaller(
         try {
             // Unzipped here, not with tar's -z: toybox runs /system/bin/zcat for that, which
             // PRoot is refused like tar itself.
-            runProot("--link2symlink", "-0", *tar.argv.toTypedArray(), "-xf", "-", "-C", root.path, stdin = tarball)
+            val (code, output) = runProot(paths.proot.path, paths.prootEnv(), tarball, "--link2symlink", "-0", *tar.argv.toTypedArray(), "-xf", "-", "-C", root.path)
+            if (code != 0) throw prootFailure(code, output, "extract")
         } finally {
             tar.file.delete()
         }
 
         _state.value = InstallState.Configuring
-        RootfsSetup.configure(root, uid, gid)
+        // Arch configures itself on first boot; Debian gets the apt tweaks. Both get the shared part.
+        if (distro == Distro.ARCH) ArchSetup.configure(paths, root, uid, gid) else RootfsSetup.configure(root, uid, gid, distro)
         FakeProc.write(paths.fakeProcDir)
         File(root, ContainerPaths.INSTALLED_MARKER).writeText("${distro.name} ${artifact.key}\n")
         tarball.delete()
@@ -150,35 +152,53 @@ class RootfsInstaller(
         return HostTar(copy, listOf(copy.path))
     }
 
-    /** Runs PRoot with [args], feeding it [stdin] gunzipped. */
-    private suspend fun runProot(vararg args: String, stdin: File) {
-        val (code, output) = runInterruptible {
-            val proc = ProcessBuilder(listOf(paths.proot.path) + args)
-                .redirectErrorStream(true)
-                .apply { environment().putAll(paths.prootEnv()) }
-                .start()
-            // Fed from its own thread: tar's output must keep draining meanwhile.
-            val feeder = Thread {
+}
+
+/**
+ * Runs PRoot with [args] — the tarball flags, or `/bin/sh -c <script>` for a first-boot script —
+ * feeding it [stdin] gunzipped when it holds a tarball to read, under the host env [env]. Returns
+ * the exit code and everything it printed; the caller turns a nonzero one into an [InstallFailure].
+ */
+internal suspend fun runProot(
+    proot: String,
+    env: Map<String, String>,
+    stdin: File?,
+    vararg args: String,
+): Pair<Int, List<String>> {
+    val (code, output) = runInterruptible {
+        val builder = ProcessBuilder(listOf(proot) + args)
+            .redirectErrorStream(true)
+            .apply { environment().putAll(env) }
+        // No tarball to feed (a first-boot script): don't hand the child a pipe it may wait on.
+        if (stdin == null) builder.redirectInput(ProcessBuilder.Redirect.from(File("/dev/null")))
+        val proc = builder.start()
+        // Fed from its own thread: tar's output must keep draining meanwhile.
+        var feeder: Thread? = null
+        if (stdin != null) {
+            feeder = Thread {
                 runCatching {
                     java.util.zip.GZIPInputStream(stdin.inputStream().buffered()).use { input ->
                         proc.outputStream.use { input.copyTo(it) }
                     }
                 }
             }.apply { start() }
-            try {
-                val output = proc.inputStream.bufferedReader().readLines()
-                proc.waitFor() to output
-            } finally {
-                proc.destroy()
-                feeder.join()
-            }
         }
-        if (code != 0) {
-            val message = if (ptraceRefused(output)) PTRACE_REFUSED else "extract failed ($code): ${prootErrors(output)}"
-            throw InstallFailure(message, output.joinToString("\n"))
+        try {
+            val output = proc.inputStream.bufferedReader().readLines()
+            proc.waitFor() to output
+        } finally {
+            proc.destroy()
+            feeder?.join()
         }
     }
+    return code to output
 }
+
+/**
+ * The [InstallFailure] a PRoot run that exited [code] with [output] produced; ptrace refusal gets its own advice.
+ */
+internal fun prootFailure(code: Int, output: List<String>, what: String = "extract"): InstallFailure =
+    InstallFailure(if (ptraceRefused(output)) PTRACE_REFUSED else "$what failed ($code): ${prootErrors(output)}", output.joinToString("\n"))
 
 /**
  * The kernel refused PRoot's PTRACE_TRACEME, so nothing at all can run under PRoot. Stock
@@ -212,7 +232,40 @@ internal fun prootErrors(output: List<String>): String {
  * and in a directory the app can't write itself.
  */
 object ChrootSetup {
-    fun script(root: String, tarball: String, marker: String): String = """
+    fun script(root: String, tarball: String, marker: String, distro: Distro = Distro.DEBIAN): String {
+        val firstBoot = if (distro == Distro.ARCH) {
+            """
+                # Arch needs its keyring primed from the ALARM mirror before pacman can install anything.
+                [ -e "${'$'}T/etc/pacman.d/mirrorlist" ] || echo 'Server = https://ca.us.mirror.archlinuxarm.org/os/' > "${'$'}T/etc/pacman.d/mirrorlist"
+                # pacman-key is the guest's, so it must run as the guest: give gpg the device
+                # nodes a tarball may lack, then step in with the first chroot tool the phone has.
+                mkdir -p "${'$'}T/dev"
+                for d in null zero random urandom; do
+                  [ ! -e "/dev/${'$'}d" ] || [ -e "${'$'}T/dev/${'$'}d" ] || cp -a "/dev/${'$'}d" "${'$'}T/dev/${'$'}d" || true
+                done
+                ENTER=
+                if command -v chroot >/dev/null 2>&1; then
+                  ENTER=chroot
+                else
+                  for bb in /data/adb/magisk/busybox /data/adb/ksu/bin/busybox /data/adb/ap/bin/busybox; do
+                    if [ -x "${'$'}bb" ]; then ENTER="${'$'}bb chroot"; break; fi
+                  done
+                fi
+                [ -n "${'$'}ENTER" ] || { echo "No chroot found to initialise the Arch keyring" >&2; exit 1; }
+                GUEST_ENV="/usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/root"
+                ${'$'}ENTER "${'$'}T" ${'$'}GUEST_ENV /usr/bin/pacman-key --init
+                ${'$'}ENTER "${'$'}T" ${'$'}GUEST_ENV /usr/bin/pacman-key --populate archlinuxarm
+            """.trimIndent()
+        } else {
+            """
+                # apt downloads as _apt, which isn't in Android's network groups.
+                [ -d "${'$'}T/etc/apt/apt.conf.d" ] && echo 'APT::Sandbox::User "root";' > "${'$'}T/etc/apt/apt.conf.d/99launcher"
+                for f in "${'$'}T"/etc/apt/sources.list.d/*.sources; do
+                  [ -f "${'$'}f" ] && sed -i 's/^Components:.*/Components: main contrib non-free non-free-firmware/' "${'$'}f"
+                done
+            """.trimIndent()
+        }
+        return """
         set -e
         R='$root'
         T="${'$'}R.partial"
@@ -224,11 +277,7 @@ object ChrootSetup {
         rm -f "${'$'}T/etc/resolv.conf" "${'$'}T/etc/hosts"
         printf '%s' ${shellQuote(HostDns.resolvConf(emptyList()))} > "${'$'}T/etc/resolv.conf"
         printf '127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n' > "${'$'}T/etc/hosts"
-        # apt downloads as _apt, which isn't in Android's network groups.
-        [ -d "${'$'}T/etc/apt/apt.conf.d" ] && echo 'APT::Sandbox::User "root";' > "${'$'}T/etc/apt/apt.conf.d/99launcher"
-        for f in "${'$'}T"/etc/apt/sources.list.d/*.sources; do
-          [ -f "${'$'}f" ] && sed -i 's/^Components:.*/Components: main contrib non-free non-free-firmware/' "${'$'}f"
-        done
+        $firstBoot
         # Groups Android gives apps, named so id and bash stay quiet.
         for g in aid_inet:3003 aid_net_raw:3004 aid_everybody:9997; do
           grep -q "^${'$'}{g%%:*}:" "${'$'}T/etc/group" || echo "${'$'}{g%%:*}:x:${'$'}{g#*:}:" >> "${'$'}T/etc/group"
@@ -237,7 +286,8 @@ object ChrootSetup {
         echo '$marker' > "${'$'}T/${ContainerPaths.INSTALLED_MARKER}"
         mv "${'$'}T" "${'$'}R"
         echo "Installed at ${'$'}R"
-    """.trimIndent()
+        """.trimIndent()
+    }
 
     /**
      * Deletes the system at [root] and what installs left beside it, as root; its last line says
@@ -275,19 +325,26 @@ object ChrootSetup {
 
 /** First-boot configuration of a freshly extracted rootfs. Plain file edits, no guest code runs. */
 object RootfsSetup {
-    fun configure(root: File, uid: Int, gid: Int) {
+    fun configure(root: File, uid: Int, gid: Int, distro: Distro = Distro.DEBIAN) {
+        configureCommon(root, uid, gid)
+        // apt is Debian's package manager; Arch uses pacman, and its first boot primes the keyring.
+        if (distro == Distro.DEBIAN) {
+            val etc = File(root, "etc").apply { mkdirs() }
+            File(etc, "apt/apt.conf.d").takeIf { it.isDirectory }?.let {
+                File(it, "99launcher").writeText("APT::Sandbox::User \"root\";\n")
+            }
+            enableAllComponents(etc)
+        }
+    }
+
+    /** The rootfs setup every distro shares: DNS, the app user, and Android's supplementary groups. */
+    internal fun configureCommon(root: File, uid: Int, gid: Int) {
         val etc = File(root, "etc").apply { mkdirs() }
 
         // Android has no /etc/resolv.conf, and image ones may be symlinks into /run. Automatic:
         // Android's own servers replace these as sessions start (HostDns).
         replace(File(etc, "resolv.conf"), HostDns.resolvConf(emptyList()))
         replace(File(etc, "hosts"), "127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n")
-
-        // apt drops privileges to _apt for downloads, which PRoot's fake root can't do.
-        File(etc, "apt/apt.conf.d").takeIf { it.isDirectory }?.let {
-            File(it, "99launcher").writeText("APT::Sandbox::User \"root\";\n")
-        }
-        enableAllComponents(etc)
 
         // Non-root sessions run as the app's real uid; give it a name and a home.
         val shell = if (File(root, "bin/bash").exists()) "/bin/bash" else "/bin/sh"
