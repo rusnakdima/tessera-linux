@@ -18,9 +18,10 @@ import java.net.URL
 import java.net.URLEncoder
 import java.security.MessageDigest
 
-/** A distribution we can install, as an official Docker Hub image. */
+/** A distribution we can install: Debian from its official OCI image, Arch Linux ARM from its published tarball. */
 enum class Distro(val label: String, val repo: String, val tag: String, val downloadMb: Int) {
     DEBIAN("Debian 13", "library/debian", "trixie", 50),
+    ARCH("Arch Linux ARM", "archlinuxarm", "aarch64", 830),
 }
 
 /** OCI platform for an Android ABI. */
@@ -122,6 +123,7 @@ class OciRegistry(
         }
 
     companion object {
+        const val REGISTRY_URL = "https://registry-1.docker.io"
         private val json = Json { ignoreUnknownKeys = true }
         private const val MANIFEST_TYPES =
             "application/vnd.oci.image.index.v1+json, " +

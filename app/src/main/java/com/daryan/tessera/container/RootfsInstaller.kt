@@ -4,6 +4,7 @@
 package com.daryan.tessera.container
 
 import android.os.Build
+import android.os.StatFs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -62,16 +63,25 @@ class RootfsInstaller(
         job?.cancel()
     }
 
-    /** The distro's image, downloaded and digest-checked; kept across failed attempts. */
-    private suspend fun fetch(distro: Distro): Pair<Layer, File> {
+    /** The distro's image, resolved and verified against its published checksum; kept across failed attempts. */
+    private suspend fun fetch(distro: Distro): Pair<RootfsArtifact, File> {
         _state.value = InstallState.Resolving
-        val layer = registry.resolve(distro, Platform.forAbi(Build.SUPPORTED_ABIS.first()))
-        val tarball = File(paths.cacheDir, "rootfs-${layer.digest.substringAfter(':').take(16)}.tar.gz")
-        if (tarball.length() != layer.size) {
-            _state.value = InstallState.Downloading(0, layer.size)
-            registry.download(distro, layer, tarball) { _state.value = InstallState.Downloading(it, layer.size) }
+        val artifact = RootfsSources.resolve(distro, Platform.forAbi(Build.SUPPORTED_ABIS.first()))
+        val tarball = File(paths.cacheDir, "rootfs-${artifact.key.take(16)}.tar.gz")
+        if (tarball.isFile && artifact.verify(tarball)) return artifact to tarball
+        // A cached copy that no longer verifies is stale: take it aside and download afresh.
+        tarball.delete()
+        if (StatFs(paths.cacheDir.path).availableBytes < artifact.size * 3L) {
+            throw InstallFailure("About 2.5 GB of free space is needed to install Arch", "")
         }
-        return layer to tarball
+        _state.value = InstallState.Downloading(0, artifact.size)
+        try {
+            RootfsSources.download(artifact, tarball) { done -> _state.value = InstallState.Downloading(done, artifact.size) }
+        } catch (e: CancellationException) {
+            File(tarball.path + ".part").delete()
+            throw e
+        }
+        return artifact to tarball
     }
 
     /**
@@ -80,10 +90,10 @@ class RootfsInstaller(
      * never replaced.
      */
     private suspend fun installChroot(distro: Distro, su: String) {
-        val (layer, tarball) = fetch(distro)
+        val (artifact, tarball) = fetch(distro)
         _state.value = InstallState.Extracting
         val script = File(paths.cacheDir, "chroot-install.sh")
-        script.writeText(ChrootSetup.script(paths.chrootRootfs.path, tarball.path, "${distro.name} ${layer.digest}"))
+        script.writeText(ChrootSetup.script(paths.chrootRootfs.path, tarball.path, "${distro.name} ${artifact.key}"))
         runInterruptible {
             val proc = ProcessBuilder(su, "-c", "/system/bin/sh ${script.path}").redirectErrorStream(true).start()
             try {
@@ -98,7 +108,7 @@ class RootfsInstaller(
     }
 
     private suspend fun install(distro: Distro) {
-        val (layer, tarball) = fetch(distro)
+        val (artifact, tarball) = fetch(distro)
 
         // Extract straight into place: link2symlink records absolute paths, so the tree can't be
         // moved afterwards. The marker file written last is what makes it count as installed.
@@ -118,7 +128,7 @@ class RootfsInstaller(
         _state.value = InstallState.Configuring
         RootfsSetup.configure(root, uid, gid)
         FakeProc.write(paths.fakeProcDir)
-        File(root, ContainerPaths.INSTALLED_MARKER).writeText("${distro.name} ${layer.digest}\n")
+        File(root, ContainerPaths.INSTALLED_MARKER).writeText("${distro.name} ${artifact.key}\n")
         tarball.delete()
     }
 

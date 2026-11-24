@@ -42,7 +42,13 @@ class OciRegistryTest {
         val one = Json.parseToJsonElement(
             """{"layers": [{"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": "sha256:x", "size": 42}]}""",
         ).jsonObject
-        assertEquals(Layer("sha256:x", 42), OciRegistry.singleLayer(one))
+        // The layer a download would verify against: what the artifact that fetches it checks.
+        val artifact = RootfsSources.fromLayer(OciRegistry.singleLayer(one))
+        assertEquals("sha256:x", artifact.key)
+        assertEquals(42, artifact.size)
+        assertEquals("SHA-256", artifact.algorithm)
+        assertEquals("x", artifact.checksum)
+        assertEquals("https://registry-1.docker.io/v2/library/debian/blobs/sha256:x", artifact.url)
 
         val two = Json.parseToJsonElement(
             """{"layers": [{"mediaType": "a+gzip", "digest": "d", "size": 1}, {"mediaType": "a+gzip", "digest": "e", "size": 1}]}""",
