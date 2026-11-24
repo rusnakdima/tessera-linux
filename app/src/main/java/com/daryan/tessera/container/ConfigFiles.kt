@@ -32,7 +32,11 @@ object ConfigCatalog {
 interface ConfigStore {
     /** The file's text, or null when it doesn't exist. */
     suspend fun read(path: String): String?
+
     suspend fun write(path: String, text: String)
+
+    /** The names of the entries in directory [path]; empty when it has none or isn't there. */
+    suspend fun list(path: String): List<String> = emptyList()
 }
 
 /** PRoot mode: the rootfs lives in app storage. */
@@ -47,6 +51,10 @@ class DirectConfigStore(private val root: File) : ConfigStore {
         if (f.isFile && !backup.exists()) f.copyTo(backup)
         f.parentFile?.mkdirs()
         f.writeText(text)
+    }
+
+    override suspend fun list(path: String): List<String> = withContext(Dispatchers.IO) {
+        guest(path).listFiles()?.map { it.name }.orEmpty()
     }
 
     private fun guest(path: String): File {
@@ -86,6 +94,18 @@ class SuConfigStore(
         proc.outputStream.use { it.write(text.toByteArray()) }
         val err = proc.errorStream.bufferedReader().readText()
         if (proc.waitFor() != 0) throw IOException("su: ${err.ifBlank { "write failed" }.trim()}")
+    }
+
+    override suspend fun list(path: String): List<String> = withContext(Dispatchers.IO) {
+        val p = shellQuote(guest(path))
+        val proc = ProcessBuilder(su, "-c", "if [ -d $p ]; then ls -1 $p; else exit $MISSING; fi").start()
+        val text = proc.inputStream.bufferedReader().readText()
+        val err = proc.errorStream.bufferedReader().readText()
+        when (proc.waitFor()) {
+            0 -> text.lineSequence().filter { it.isNotEmpty() }.toList()
+            MISSING -> emptyList()
+            else -> throw IOException("su: ${err.ifBlank { "permission denied" }.trim()}")
+        }
     }
 
     private fun guest(path: String): String {

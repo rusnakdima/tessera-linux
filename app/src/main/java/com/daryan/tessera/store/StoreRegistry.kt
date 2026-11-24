@@ -4,6 +4,7 @@
 package com.daryan.tessera.store
 
 import com.daryan.tessera.container.ConfigStore
+import com.daryan.tessera.container.Distro
 import com.daryan.tessera.container.FsGrant
 import com.daryan.tessera.container.PermissionManifest
 import com.daryan.tessera.container.Permissions
@@ -35,16 +36,26 @@ class StoreRegistry(private val appsDir: File, private val catalog: StoreCatalog
      */
     val flatpaks: StateFlow<Set<String>?> = _flatpaks
 
-    suspend fun refreshInstalled(store: ConfigStore?) {
+    suspend fun refreshInstalled(store: ConfigStore?, distro: Distro = Distro.DEBIAN) {
         _flatpaks.value = store?.let { s ->
             flatpakApps().filterTo(mutableSetOf()) { id ->
                 runCatching { s.read(com.daryan.tessera.container.Flatpak.appMetadata(id)) }.getOrNull() != null
             }
         }
         _installed.value = store?.let { s ->
-            runCatching { s.read("/var/lib/dpkg/status")?.let(::installedPackages) }.getOrNull()
+            when (distro) {
+                Distro.DEBIAN -> runCatching { s.read(DPKG_STATUS)?.let(::installedPackages) }.getOrNull()
+                // pacman's local database is the only source; a failure is an empty set, not dpkg.
+                Distro.ARCH -> runCatching { pacmanPackages(s) }.getOrElse { emptySet() }
+            }
         }
     }
+
+    /** Packages in pacman's local database: one directory per package, its name in `desc`. */
+    private suspend fun pacmanPackages(store: ConfigStore): Set<String> =
+        store.list(PACMAN_LOCAL).mapNotNullTo(mutableSetOf()) { dir ->
+            store.read("$PACMAN_LOCAL/$dir/desc")?.let(::parsePacmanDesc)
+        }
 
     /** Adds the launcher entry for a freshly installed [app], reading its .desktop file. */
     suspend fun register(app: StoreApp, store: ConfigStore) = withContext(Dispatchers.IO) {
@@ -194,6 +205,9 @@ class StoreRegistry(private val appsDir: File, private val catalog: StoreCatalog
     companion object {
         private val json = Json { prettyPrint = true; encodeDefaults = false }
 
+        private const val DPKG_STATUS = "/var/lib/dpkg/status"
+        private const val PACMAN_LOCAL = "/var/lib/pacman/local"
+
         /** The launcher id for a store app; Flathub's apart from Debian's packages. */
         fun idFor(app: StoreApp): String {
             val name = app.pkg.lowercase().replace(Regex("[^a-z0-9._-]"), "-")
@@ -206,6 +220,16 @@ class StoreRegistry(private val appsDir: File, private val catalog: StoreCatalog
             val ok = block.lineSequence().any { it.trim() == "Status: install ok installed" }
             pkg?.takeIf { ok }
         }.toSet()
+
+        /** The package name in a pacman local `desc` file: the value of its first `%NAME%` field. */
+        fun parsePacmanDesc(text: String): String? {
+            val lines = text.lineSequence().toList()
+            val name = lines.indexOfFirst { it.trim() == "%NAME%" }
+            if (name < 0) return null
+            return lines.drop(name + 1).map { it.trim() }
+                .firstOrNull { it.isNotEmpty() }
+                ?.takeUnless { it.startsWith("%") }
+        }
 
         /**
          * Launcher entry for a store app. Permissions start from what its category suggests and
