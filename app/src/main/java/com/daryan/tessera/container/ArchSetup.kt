@@ -16,7 +16,8 @@ object ArchSetup {
         # PRoot passes the app's Android PATH through; the guest's commands are under /usr/bin.
         export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         mkdir -p /etc/pacman.d
-        echo 'Server = https://ca.us.mirror.archlinuxarm.org/os/' > /etc/pacman.d/mirrorlist
+        # pacman expands the ${'$'}arch and ${'$'}repo placeholders itself; the image's own list already works, so only fill in a missing one.
+        [ -e /etc/pacman.d/mirrorlist ] || echo 'Server = https://ca.us.mirror.archlinuxarm.org/${'$'}arch/${'$'}repo' > /etc/pacman.d/mirrorlist
         /usr/bin/pacman-key --init
         /usr/bin/pacman-key --populate archlinuxarm
     """.trimIndent()

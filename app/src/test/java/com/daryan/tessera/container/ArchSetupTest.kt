@@ -24,4 +24,28 @@ class ArchSetupTest {
         val script = ChrootSetup.script("/root/debian", "/tmp/d.tar.gz", "sha256:x", Distro.DEBIAN)
         assertTrue("APT::Sandbox::User" in script)
     }
+
+    @Test fun firstBootUsesArchRepoMirrorAndKeepsAnExistingList() {
+        val script = ArchSetup.firstBootScript()
+        assertTrue(ARCH_MIRROR in script)
+        assertFalse("/os/" in script)
+        // The tarball's own mirrorlist works; only write one if the image has none.
+        assertTrue("[ -e /etc/pacman.d/mirrorlist ] ||" in script)
+    }
+
+    @Test fun chrootArchFirstBootUsesArchRepoMirror() {
+        val script = ChrootSetup.script("/root/arch", "/tmp/a.tar.gz", "arch-aarch64", Distro.ARCH)
+        assertTrue(ARCH_MIRROR in script)
+        assertFalse("/os/" in script)
+    }
+
+    @Test fun debianChrootScriptHasNoArchMirror() {
+        val script = ChrootSetup.script("/root/debian", "/tmp/d.tar.gz", "sha256:x", Distro.DEBIAN)
+        assertFalse("ca.us.mirror.archlinuxarm.org" in script)
+    }
+
+    private companion object {
+        /** pacman expands these two placeholders itself; they must stay literal in the text. */
+        const val ARCH_MIRROR = "Server = https://ca.us.mirror.archlinuxarm.org/\$arch/\$repo"
+    }
 }

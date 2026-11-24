@@ -236,7 +236,7 @@ object ChrootSetup {
         val firstBoot = if (distro == Distro.ARCH) {
             """
                 # Arch needs its keyring primed from the ALARM mirror before pacman can install anything.
-                [ -e "${'$'}T/etc/pacman.d/mirrorlist" ] || echo 'Server = https://ca.us.mirror.archlinuxarm.org/os/' > "${'$'}T/etc/pacman.d/mirrorlist"
+                [ -e "${'$'}T/etc/pacman.d/mirrorlist" ] || echo 'Server = https://ca.us.mirror.archlinuxarm.org/${'$'}arch/${'$'}repo' > "${'$'}T/etc/pacman.d/mirrorlist"
                 # pacman-key is the guest's, so it must run as the guest: give gpg the device
                 # nodes a tarball may lack, then step in with the first chroot tool the phone has.
                 mkdir -p "${'$'}T/dev"
