@@ -42,6 +42,30 @@ class DistroSelectionTest {
         assertTrue("commit" in calls)
     }
 
+    // An Arch rootfs only runs on the ABI it was built for: no emulation, no silent swap.
+    @Test
+    fun abiGateRejectsArchArmOnX8664() {
+        assertFalse(Distro.ARCH.supportedOn("x86_64"))
+        assertTrue(Distro.ARCH_X86_64.supportedOn("x86_64"))
+        assertTrue(Distro.ARCH.supportedOn("arm64-v8a"))
+        assertFalse(Distro.ARCH_X86_64.supportedOn("arm64-v8a"))
+        assertTrue(Distro.DEBIAN.supportedOn("x86_64"))
+    }
+
+    @Test
+    fun chrootRejectsArchX8664() {
+        assertFalse(Distro.ARCH_X86_64.chrootSupported())
+        assertTrue(Distro.ARCH.chrootSupported())
+        assertTrue(Distro.DEBIAN.chrootSupported())
+    }
+
+    @Test
+    fun isArchCoversBothArchVariants() {
+        assertTrue(Distro.ARCH.isArch)
+        assertTrue(Distro.ARCH_X86_64.isArch)
+        assertFalse(Distro.DEBIAN.isArch)
+    }
+
     private fun fakeEditor(calls: MutableList<String>, commitResult: Boolean): SharedPreferences.Editor =
         Proxy.newProxyInstance(
             SharedPreferences.Editor::class.java.classLoader,
