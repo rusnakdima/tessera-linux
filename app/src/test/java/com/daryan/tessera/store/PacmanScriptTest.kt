@@ -49,6 +49,22 @@ class PacmanScriptTest {
         assertTrue("${PacmanScript.AUR_DIR}/'evil; rm -rf /'" in script)
     }
 
+    @Test fun aurBuildCreatesUserAndLetsMakepkgInstallDependencies() {
+        val job = QueueJob(
+            id = 5, title = "yay", packages = listOf("yay"),
+            action = QueueAction.INSTALL, iconFile = null, aur = true,
+        )
+        val script = PacmanScript.script(job)
+        // Root install jobs skip enter.sh's user setup; chown would fail without this.
+        assertTrue("id -u user >/dev/null 2>&1 || useradd" in script)
+        assertTrue(script.indexOf("id -u user") < script.indexOf("chown user:user"))
+        // makepkg -s calls sudo pacman for dependencies outside base-devel.
+        assertTrue("sudo" in script)
+        assertTrue("/etc/sudoers.d/tessera-aur" in script)
+        assertTrue("NOPASSWD: /usr/bin/pacman" in script)
+        assertTrue(script.indexOf("tessera-aur") < script.indexOf("makepkg -s"))
+    }
+
     @Test fun aurFailureKeepsMakepkgOutput() {
         val lines = listOf("==> ERROR: package is only available for x86_64", "makepkg failed")
         assertEquals("==> ERROR: package is only available for x86_64",

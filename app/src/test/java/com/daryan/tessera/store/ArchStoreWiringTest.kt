@@ -76,4 +76,14 @@ class ArchStoreWiringTest {
         assertEquals(StoreSource.DEBIAN, StoreInstalls.storeSourceFor(StoreSource.ARCH, Distro.DEBIAN))
         assertEquals(StoreSource.DEBIAN, StoreInstalls.storeSourceFor(StoreSource.AUR, Distro.DEBIAN))
     }
+
+    @Test fun archAndAurAppsShowTheirOwnProvenance() {
+        assertTrue(StoreInstalls.provenance(archApp()).startsWith("Arch Linux"))
+        assertFalse("Debian" in StoreInstalls.provenance(archApp()))
+        assertTrue(StoreInstalls.provenance(aurApp()).startsWith("AUR"))
+        assertEquals("Flathub · org.example.App",
+            StoreInstalls.provenance(archApp().copy(id = "org.example.App", source = StoreSource.FLATHUB)))
+        assertEquals("Debian · main", StoreInstalls.provenance(archApp().copy(
+            source = StoreSource.DEBIAN, component = "main")))
+    }
 }

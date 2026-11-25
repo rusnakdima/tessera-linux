@@ -3,10 +3,12 @@
 
 package com.daryan.tessera.container
 
+import android.content.SharedPreferences
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.lang.reflect.Proxy
 
 class DistroSelectionTest {
     @Test fun defaultIsDebian() = assertEquals(Distro.DEBIAN, DistroSelection.fromName(null))
@@ -26,4 +28,33 @@ class DistroSelectionTest {
     @Test fun switchingWithNoLiveSessionsDoesNotNeedConfirmation() {
         assertFalse(DistroSelection.needsConfirmation(0, Distro.DEBIAN, Distro.ARCH))
     }
+
+    // The process is killed right after this write; apply() would only queue the disk write.
+    @Test fun distroSaveCommitsToDiskBeforeRestart() {
+        val calls = mutableListOf<String>()
+        assertTrue(DistroSelection.save(fakeEditor(calls, commitResult = true), Distro.ARCH))
+        assertEquals(listOf("putString:active_distro=ARCH", "commit"), calls)
+    }
+
+    @Test fun failedDistroSaveIsReportedToTheCaller() {
+        val calls = mutableListOf<String>()
+        assertFalse(DistroSelection.save(fakeEditor(calls, commitResult = false), Distro.ARCH))
+        assertTrue("commit" in calls)
+    }
+
+    private fun fakeEditor(calls: MutableList<String>, commitResult: Boolean): SharedPreferences.Editor =
+        Proxy.newProxyInstance(
+            SharedPreferences.Editor::class.java.classLoader,
+            arrayOf(SharedPreferences.Editor::class.java),
+        ) { proxy, method, args ->
+            when (method.name) {
+                "putString" -> {
+                    calls += "putString:${args[0]}=${args[1]}"
+                    proxy
+                }
+                "commit" -> { calls += "commit"; commitResult }
+                "apply" -> { calls += "apply"; Unit }
+                else -> null
+            }
+        } as SharedPreferences.Editor
 }

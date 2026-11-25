@@ -40,4 +40,11 @@ object StoreInstalls {
      */
     fun packageBaseFor(app: StoreApp): String =
         app.aurPath?.substringAfterLast('/')?.removeSuffix(".tar.gz")?.takeIf { it.isNotBlank() } ?: app.pkg
+
+    /** Where an app came from, as shown on its Store page. */
+    fun provenance(app: StoreApp): String = when (app.source) {
+        StoreSource.FLATHUB -> "Flathub · ${app.id}"
+        StoreSource.AUR -> "AUR · ${app.pkg}"
+        else -> "${app.source.label} · ${app.component}"
+    }
 }

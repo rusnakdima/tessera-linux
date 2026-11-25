@@ -159,7 +159,13 @@ object PacmanScript : PackageScript {
         val pkgbase = job.packages.single()
         val repo = shellQuote("https://aur.archlinux.org/$pkgbase.git")
         val dir = "$AUR_DIR/${shellQuote(pkgbase)}"
-        return "pacman -S --noconfirm --needed base-devel git && " +
+        // Root install jobs skip enter.sh's user setup, so create the builder if it isn't there.
+        // makepkg -s uses sudo for dependencies outside base-devel; the narrow drop-in lets it
+        // call pacman without a password, and nothing else.
+        return "pacman -S --noconfirm --needed base-devel git sudo && " +
+            "(id -u user >/dev/null 2>&1 || useradd -m -u 10000 user) && " +
+            "printf '%s\\n' 'user ALL=(root) NOPASSWD: /usr/bin/pacman' > /etc/sudoers.d/tessera-aur && " +
+            "chmod 440 /etc/sudoers.d/tessera-aur && " +
             "rm -rf $AUR_DIR && mkdir -p $AUR_DIR && chown user:user $AUR_DIR && " +
             "runuser -u user -- git clone --depth 1 $repo $dir && " +
             "cd $dir && runuser -u user -- makepkg -s --noconfirm && " +

@@ -37,7 +37,6 @@ import com.daryan.tessera.container.ChrootBackend
 import com.daryan.tessera.container.ChrootSetup
 import com.daryan.tessera.container.ContainerMenu
 import com.daryan.tessera.container.GuestRelease
-import com.daryan.tessera.container.missingPackages
 import com.daryan.tessera.store.CatalogSource
 import com.daryan.tessera.container.ContainerBackend
 import com.daryan.tessera.container.Droidspaces
@@ -45,14 +44,11 @@ import com.daryan.tessera.container.DroidspacesBackend
 import com.daryan.tessera.container.DroidspacesContainer
 import com.daryan.tessera.container.DroidspacesHost
 import com.daryan.tessera.container.DirectConfigStore
-import com.daryan.tessera.container.BASE_LIBRARIES
-import com.daryan.tessera.container.GUI_HELPER_PACKAGES
-import com.daryan.tessera.container.THEME_COMPANIONS
-import com.daryan.tessera.container.DESKTOP_COMPANIONS
 import com.daryan.tessera.container.ThemePack
 import com.daryan.tessera.container.SuConfigStore
 import com.daryan.tessera.container.Distro
 import com.daryan.tessera.container.DistroSelection
+import com.daryan.tessera.container.AutoInstalls
 import com.daryan.tessera.container.HostProbe
 import com.daryan.tessera.container.HostStatus
 import com.daryan.tessera.container.InstallState
@@ -155,7 +151,10 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
             sessions.stopAll()
             viewModelScope.launch { _messages.send("Closed running Linux apps to switch to ${distro.label}") }
         }
-        prefs.edit().putString(DistroSelection.KEY, distro.name).apply()
+        if (!DistroSelection.save(prefs.edit(), distro)) {
+            viewModelScope.launch { _messages.send("Couldn't save the distro selection") }
+            return
+        }
         _distro.value = distro
         _restartRequested.value = true
     }
@@ -509,6 +508,11 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Finds the package with [missing] and installs it, in the queue; false when no system is ready. */
     fun installMissing(app: PermissionManifest, missing: Missing): Boolean {
+        // The missing-program probe reads Debian's dpkg file lists; Arch has no equivalent here.
+        if (container.distro == Distro.ARCH) {
+            viewModelScope.launch { _messages.send("Install that from the Arch Store; automatic detection is Debian-only") }
+            return false
+        }
         val backend = backend() ?: return false
         if (blocker(_status.value, _mode.value) != null) return false
         val store = configStore(_status.value, _mode.value)
@@ -885,7 +889,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         // Unread (no Linux yet, or dpkg's status unreadable): check again next time.
         val installed = container.registry.installed.value ?: return
         container.baseLibrariesChecked += checkKey()
-        val missing = missingPackages(BASE_LIBRARIES, installed)
+        val missing = AutoInstalls.missingBase(container.distro, installed)
         if (missing.isEmpty()) return
         // Names are Debian 13's; what another release or a derivative lacks is skipped.
         container.queue.enqueue("Graphics and app libraries", missing, QueueAction.INSTALL, null, backend, optional = missing.toSet(), fallback = debianFallback()) {
@@ -905,11 +909,8 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         container.guiHelpersChecked += checkKey()
         container.registry.refreshInstalled(store, container.distro)
         val installed = container.registry.installed.value ?: return
-        if ("matchbox-window-manager" !in installed) return
-        // And what lets Qt and LibreOffice, where installed, follow the theme, and a desktop's
-        // file manager.
-        val companions = (THEME_COMPANIONS + DESKTOP_COMPANIONS).filterKeys { it in installed }.values.filterNot { it in installed }
-        val missing = GUI_HELPER_PACKAGES.filterNot { it in installed } + companions
+        // The active distro's window manager: Openbox on Arch, Matchbox on Debian.
+        val missing = AutoInstalls.missingGui(container.distro, installed)
         if (missing.isEmpty()) return
         container.queue.enqueue("Sound, keyboard and theme helpers", missing, QueueAction.INSTALL, null, backend, optional = missing.toSet(), fallback = debianFallback()) {
             container.registry.refreshInstalled(store, container.distro)
@@ -1138,7 +1139,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         val store = configStore(_status.value, _mode.value)
         container.queue.enqueue(
             "Flathub", listOf(FLATHUB_SETUP), QueueAction.INSTALL, null, backend,
-            script = Flatpak.setupScript(GUI_HELPER_PACKAGES),
+            script = Flatpak.setupScript(AutoInstalls.guiHelpers(container.distro)),
         ) {
             if (checkFlathub(store)) container.flathub.load()
             container.registry.refreshInstalled(store, container.distro)
@@ -1271,7 +1272,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
             ) { container.registry.reresolveFlatpak(app, store) }
             return true
         }
-        val helpers = if (app.gui) GUI_HELPER_PACKAGES.filterNot { it in app.packages } else emptyList()
+        val helpers = if (app.gui) AutoInstalls.guiHelpers(container.distro).filterNot { it in app.packages } else emptyList()
         container.queue.enqueue(app.name, app.packages + helpers, QueueAction.INSTALL, app.iconFile, backend, optional = helpers.toSet(), fallback = debianFallback()) {
             container.registry.refreshInstalled(store, container.distro)
         }
@@ -1515,7 +1516,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         val backend = backend() ?: return
         if (container.registry.installed.value == null) container.registry.refreshInstalled(store, container.distro)
         val installed = container.registry.installed.value ?: return
-        val missing = PhoneAdb.PACKAGES.filterNot { it in installed }
+        val missing = AutoInstalls.adb(container.distro).filterNot { it in installed }
         if (missing.isEmpty() || container.queue.jobs.value.any { it.active && it.packages == missing }) return
         container.queue.enqueue("adb and fastboot", missing, QueueAction.INSTALL, null, backend, fallback = debianFallback()) {
             container.registry.refreshInstalled(store, container.distro)

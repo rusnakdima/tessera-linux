@@ -77,6 +77,7 @@ import com.daryan.tessera.store.CatalogState
 import com.daryan.tessera.store.JobState
 import com.daryan.tessera.store.QueueJob
 import com.daryan.tessera.store.StoreApp
+import com.daryan.tessera.store.StoreInstalls
 import com.daryan.tessera.store.StoreRegistry
 import com.daryan.tessera.store.StoreSource
 import java.io.File
@@ -486,7 +487,7 @@ fun StoreAppSheet(
             }
             Spacer(Modifier.height(16.dp))
             Text(
-                if (app.source == StoreSource.FLATHUB) "Flathub · ${app.id}" else "Package ${app.pkg} · Debian ${app.component}",
+                StoreInstalls.provenance(app),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
