@@ -99,6 +99,31 @@ class StoreCatalog(private val dir: File, private val scope: CoroutineScope) {
         }
     }
 
+    /** Loads the Arch repositories and the AUR into the same catalog state the store observes. */
+    fun loadArch(refresh: Boolean = false) {
+        val key = "arch"
+        if (_state.value is CatalogState.Loading && loading == key) return
+        job?.cancel()
+        loading = key
+        job = scope.launch(Dispatchers.IO) {
+            _state.value = try {
+                val cache = File(dir, "catalog-arch.json")
+                val cached = if (!refresh) readCache(cache) else null
+                cached ?: run {
+                    _state.value = CatalogState.Loading("Reading the Arch and AUR catalogs", null)
+                    val apps = ArchCatalog.load(dir).distinctBy { it.id }.sortedBy { it.name.lowercase() }
+                    cache.parentFile?.mkdirs()
+                    cache.writeText(json.encodeToString(Cache.serializer(), Cache(apps)))
+                    CatalogState.Ready(apps, System.currentTimeMillis())
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                CatalogState.Failed(e.message ?: e.javaClass.simpleName)
+            }
+        }
+    }
+
     private fun readCache(cache: File): CatalogState.Ready? {
         if (!cache.isFile || System.currentTimeMillis() - cache.lastModified() > MAX_AGE_MS) return null
         return runCatching {

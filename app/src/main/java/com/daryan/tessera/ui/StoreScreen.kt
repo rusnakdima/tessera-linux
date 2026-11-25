@@ -189,6 +189,8 @@ fun StoreScreen(
                             when (source) {
                                 StoreSource.DEBIAN -> "First time only: about 20 MB of app listings and icons from Debian."
                                 StoreSource.FLATHUB -> "First time only: about 10 MB of app listings from Flathub. Icons come as you scroll."
+                                StoreSource.ARCH -> "First time only: reading the Arch package databases from the repositories."
+                                StoreSource.AUR -> "First time only: about 10 MB of AUR package listings. Icons come as you scroll."
                             },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,

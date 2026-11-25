@@ -61,6 +61,17 @@ object HttpFetch {
         }
     }
 
+    /** The whole body of [url], for binary catalogs and databases that don't need streaming. */
+    fun bytes(url: String): ByteArray {
+        val conn = open(url)
+        return try {
+            if (conn.responseCode != 200) throw IOException("GET $url: HTTP ${conn.responseCode}")
+            conn.inputStream.use { it.readBytes() }
+        } finally {
+            conn.disconnect()
+        }
+    }
+
     /** Content-Length in bytes of [url], for the free-space check and progress; null when it can't say. */
     fun contentLength(url: String): Long? {
         val conn = open(url).apply { setRequestMethod("HEAD") }

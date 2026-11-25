@@ -28,6 +28,8 @@ data class StoreApp(
     val screenshots: List<String> = emptyList(),
     /** Where to download the icon, for catalogs without an icon pack (Flathub). */
     val iconUrl: String? = null,
+    /** AUR source tarball path from the RPC (`URLPath`), for Arch packages built from the AUR. */
+    val aurPath: String? = null,
 )
 
 /** The stores the Store tab can show. */
@@ -35,6 +37,10 @@ data class StoreApp(
 enum class StoreSource(val label: String) {
     DEBIAN("Debian"),
     FLATHUB("Flathub"),
+    /** Arch Linux's official repositories, read from their pacman databases. */
+    ARCH("Arch Linux"),
+    /** The Arch User Repository, whose packages are built from source on the device. */
+    AUR("AUR"),
 }
 
 /**

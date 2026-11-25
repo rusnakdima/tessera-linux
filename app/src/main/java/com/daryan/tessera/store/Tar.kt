@@ -9,33 +9,56 @@ import java.io.InputStream
 
 /** Just enough of ustar to unpack an icon pack: regular files, flattened into one directory. */
 object Tar {
+    /**
+     * Regular-file entries of a ustar archive as (path, bytes) pairs, in archive order. GNU long
+     * names and pax paths are honoured; other entry types are skipped.
+     */
+    fun entries(input: InputStream, accept: (String) -> Boolean = { true }): Sequence<Pair<String, ByteArray>> =
+        sequence {
+            val header = ByteArray(BLOCK)
+            var longName: String? = null
+            while (true) {
+                if (!readFully(input, header)) break
+                if (header.all { it == 0.toByte() }) break // end-of-archive marker
+                val size = field(header, 124, 12).trim().ifEmpty { "0" }.toLong(8)
+                val type = header[156].toInt().toChar()
+                val padded = (size + BLOCK - 1) / BLOCK * BLOCK
+                if (type == 'L' || type == 'x') {
+                    val data = java.io.ByteArrayOutputStream().also { copyExactly(input, it, size) }.toByteArray()
+                    skipExactly(input, padded - size)
+                    val text = String(data, Charsets.UTF_8)
+                    when (type) {
+                        'L' -> longName = text.trimEnd('\u0000')
+                        'x' -> paxField(text, "path")?.let { longName = it }
+                    }
+                    continue
+                }
+                val name = (longName ?: field(header, 345, 155).let { prefix ->
+                    val base = field(header, 0, 100)
+                    if (prefix.isEmpty()) base else "$prefix/$base"
+                }).trimEnd('/')
+                longName = null
+                if ((type == '0' || type == '\u0000') && name.isNotEmpty() && accept(name)) {
+                    val bytes = java.io.ByteArrayOutputStream().also { copyExactly(input, it, size) }.toByteArray()
+                    skipExactly(input, padded - size)
+                    yield(name to bytes)
+                } else {
+                    skipExactly(input, padded)
+                }
+            }
+        }
+
     /** Extracts regular files from [input] into [dest] by base name. Returns how many. */
     fun extractFlat(input: InputStream, dest: File, accept: (String) -> Boolean = { true }): Int {
         dest.mkdirs()
-        val header = ByteArray(BLOCK)
         var count = 0
-        while (true) {
-            if (!readFully(input, header)) break
-            if (header.all { it == 0.toByte() }) break // end-of-archive marker
-            val name = field(header, 345, 155).let { prefix ->
-                val base = field(header, 0, 100)
-                if (prefix.isEmpty()) base else "$prefix/$base"
-            }
-            val size = field(header, 124, 12).trim().ifEmpty { "0" }.toLong(8)
-            val type = header[156].toInt().toChar()
-            val padded = (size + BLOCK - 1) / BLOCK * BLOCK
-
+        entries(input) { name ->
             val fileName = name.substringAfterLast('/')
-            val wanted = (type == '0' || type == '\u0000') && fileName.isNotEmpty() && accept(fileName) &&
-                // Names come from the archive; never let one point outside dest.
-                !fileName.startsWith(".") && '\\' !in fileName
-            if (wanted) {
-                File(dest, fileName).outputStream().use { out -> copyExactly(input, out, size) }
-                skipExactly(input, padded - size)
-                count++
-            } else {
-                skipExactly(input, padded)
-            }
+            // Names come from the archive; never let one point outside dest.
+            fileName.isNotEmpty() && !fileName.startsWith(".") && '\\' !in fileName && accept(fileName)
+        }.forEach { (name, bytes) ->
+            File(dest, name.substringAfterLast('/')).outputStream().use { it.write(bytes) }
+            count++
         }
         return count
     }
