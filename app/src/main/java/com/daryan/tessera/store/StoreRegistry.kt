@@ -5,6 +5,7 @@ package com.daryan.tessera.store
 
 import com.daryan.tessera.container.ConfigStore
 import com.daryan.tessera.container.Distro
+import com.daryan.tessera.container.DistroExec
 import com.daryan.tessera.container.FsGrant
 import com.daryan.tessera.container.PermissionManifest
 import com.daryan.tessera.container.Permissions
@@ -20,7 +21,11 @@ import java.io.File
  * Apps installed from the store: their launcher entries (manifests saved under [appsDir]),
  * and which packages the container has. Installs themselves run in [InstallQueue].
  */
-class StoreRegistry(private val appsDir: File, private val catalog: StoreCatalog) {
+class StoreRegistry(
+    private val appsDir: File,
+    private val catalog: StoreCatalog,
+    private val distro: Distro = Distro.DEBIAN,
+) {
     private val _userApps = MutableStateFlow(loadManifests())
     /** Launcher entries for store-installed apps, next to the bundled ones. */
     val userApps: StateFlow<List<PermissionManifest>> = _userApps
@@ -65,11 +70,11 @@ class StoreRegistry(private val appsDir: File, private val catalog: StoreCatalog
         val icon = catalog.iconFile(app)?.let { src ->
             File(appsDir, "icons/${app.pkg}.png").also { dst -> dst.parentFile?.mkdirs(); src.copyTo(dst, overwrite = true) }
         }
-        val manifest = manifestFor(app, desktop, icon?.path)
+        val manifest = manifestFor(app, desktop, icon?.path, distro)
         File(appsDir, "${manifest.id}.json").apply { parentFile?.mkdirs() }
             .writeText(json.encodeToString(PermissionManifest.serializer(), manifest))
         _userApps.update { list -> list.filterNot { it.id == manifest.id } + manifest }
-        refreshInstalled(store)
+        refreshInstalled(store, distro)
     }
 
     /**
@@ -93,7 +98,7 @@ class StoreRegistry(private val appsDir: File, private val catalog: StoreCatalog
         File(appsDir, "${manifest.id}.json").apply { parentFile?.mkdirs() }
             .writeText(json.encodeToString(PermissionManifest.serializer(), manifest))
         _userApps.update { list -> list.filterNot { it.id == manifest.id } + manifest }
-        refreshInstalled(store)
+        refreshInstalled(store, distro)
         true
     }
 
@@ -169,7 +174,7 @@ class StoreRegistry(private val appsDir: File, private val catalog: StoreCatalog
             File(appsDir, "${manifest.id}.json").writeText(json.encodeToString(PermissionManifest.serializer(), manifest))
             _userApps.update { list -> list.map { if (it.id == manifest.id) manifest else it } }
         }
-        refreshInstalled(store)
+        refreshInstalled(store, distro)
         ref != null
     }
 
@@ -185,7 +190,7 @@ class StoreRegistry(private val appsDir: File, private val catalog: StoreCatalog
         File(appsDir, "$id.json").delete()
         m?.iconFile?.let { File(it).delete() }
         _userApps.update { list -> list.filterNot { it.id == id } }
-        refreshInstalled(store)
+        refreshInstalled(store, distro)
     }
 
     suspend fun unregister(app: StoreApp, store: ConfigStore?) = withContext(Dispatchers.IO) {
@@ -194,7 +199,7 @@ class StoreRegistry(private val appsDir: File, private val catalog: StoreCatalog
         File(appsDir, "icons/${app.pkg}.png").delete()
         File(appsDir, "icons/$id.png").delete()
         _userApps.update { list -> list.filterNot { it.id == id } }
-        refreshInstalled(store)
+        refreshInstalled(store, distro)
     }
 
     private fun loadManifests(): List<PermissionManifest> =
@@ -235,7 +240,12 @@ class StoreRegistry(private val appsDir: File, private val catalog: StoreCatalog
          * Launcher entry for a store app. Permissions start from what its category suggests and
          * nothing more: browsers and mail get the network, image editors get Pictures, and so on.
          */
-        fun manifestFor(app: StoreApp, desktop: DesktopEntry?, iconFile: String?): PermissionManifest {
+        fun manifestFor(
+            app: StoreApp,
+            desktop: DesktopEntry?,
+            iconFile: String?,
+            distro: Distro = Distro.DEBIAN,
+        ): PermissionManifest {
             val cats = app.categories.toSet()
             val terminal = desktop?.terminal == true
             val network = cats.any { it in NETWORK_CATEGORIES }
@@ -253,7 +263,7 @@ class StoreRegistry(private val appsDir: File, private val catalog: StoreCatalog
                 category = launcherCategory(app.categories),
                 icon = "terminal",
                 iconFile = iconFile,
-                exec = desktop?.exec ?: listOf("/usr/bin/${app.pkg}"),
+                exec = desktop?.exec ?: DistroExec.forPackage(distro, app.pkg) ?: listOf("/usr/bin/${app.pkg}"),
                 gui = !terminal,
                 packages = listOf(app.pkg),
                 permissions = Permissions(

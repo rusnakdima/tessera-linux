@@ -165,10 +165,10 @@ class LauncherContainer(private val app: Application) {
     /** Flathub's catalog, for the Store tab's Flathub side (once Flathub is set up). */
     val flathub = com.daryan.tessera.store.FlathubCatalog(java.io.File(app.filesDir, "store"), scope)
     val screenshots = com.daryan.tessera.store.Screenshots(java.io.File(app.cacheDir, "screenshots"))
-    val registry = StoreRegistry(java.io.File(app.filesDir, "apps"), catalog)
+    val registry = StoreRegistry(java.io.File(app.filesDir, "apps"), catalog, distro)
     val installer = RootfsInstaller(paths, OciRegistry(), scope, Process.myUid(), Process.myUid())
 
-    val queue = InstallQueue(scope, paths)
+    val queue = InstallQueue(scope, paths, distro)
     /** Commands the user put on the launcher as icons (the Shortcuts tab). */
     val shortcuts = ShortcutStore(java.io.File(app.filesDir, "shortcuts.json"))
     /** Apps installed in the container outside the Store (apt in a terminal, a .deb). */

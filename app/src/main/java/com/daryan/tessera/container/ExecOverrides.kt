@@ -65,6 +65,17 @@ class ExecOverrides(private val file: File) {
 }
 
 /**
+ * Commands that differ between a package's name and the binary it installs on a given distro.
+ * Kept beside the user's overrides: these are defaults, replaced by any command the user sets.
+ */
+object DistroExec {
+    private val ARCH = mapOf("firefox-esr" to listOf("/usr/bin/firefox"))
+
+    fun forPackage(distro: Distro, pkg: String): List<String>? =
+        if (distro == Distro.ARCH) ARCH[pkg] else null
+}
+
+/**
  * An argv as one line for the user to edit, and back. The launcher runs a command as a list of
  * arguments, never through a shell, so quotes here only hold an argument with spaces together;
  * nothing in the line is expanded.

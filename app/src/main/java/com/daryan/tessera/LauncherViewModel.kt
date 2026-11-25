@@ -21,6 +21,7 @@ import com.daryan.tessera.store.QueueAction
 import com.daryan.tessera.store.QueueJob
 import com.daryan.tessera.store.StoreApp
 import com.daryan.tessera.store.StoreCatalog
+import com.daryan.tessera.store.StoreInstalls
 import com.daryan.tessera.store.StoreRegistry
 import com.daryan.tessera.store.StoreSource
 import com.daryan.tessera.container.Flatpak
@@ -281,9 +282,14 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     val catalog: StateFlow<CatalogState> = container.catalog.state
     val flathubCatalog: StateFlow<CatalogState> = container.flathub.state
 
+    /** Only one distro's catalog is live at a time; keep the tab in step with it. */
+    private fun storeSourceFor(source: StoreSource): StoreSource = StoreInstalls.storeSourceFor(source, container.distro)
+
     private val _storeSource = MutableStateFlow(
-        runCatching { StoreSource.valueOf(app.getSharedPreferences("launcher", Context.MODE_PRIVATE).getString(KEY_STORE_SOURCE, null)!!) }
-            .getOrDefault(StoreSource.DEBIAN),
+        storeSourceFor(
+            runCatching { StoreSource.valueOf(app.getSharedPreferences("launcher", Context.MODE_PRIVATE).getString(KEY_STORE_SOURCE, null)!!) }
+                .getOrDefault(StoreSource.DEBIAN),
+        ),
     )
     /** Which store the Store tab shows. */
     val storeSource: StateFlow<StoreSource> = _storeSource
@@ -318,8 +324,9 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setStoreSource(source: StoreSource) {
-        _storeSource.value = source
-        prefs.edit().putString(KEY_STORE_SOURCE, source.name).apply()
+        val normalized = storeSourceFor(source)
+        _storeSource.value = normalized
+        prefs.edit().putString(KEY_STORE_SOURCE, normalized.name).apply()
         openStore()
     }
     val installedPackages: StateFlow<Set<String>?> = container.registry.installed
@@ -510,7 +517,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
             "What ${app.name} needs: ${missing.label}", listOf("missing:${missing.pattern}"), QueueAction.INSTALL, app.iconFile, backend,
             script = MissingPackages.script(missing),
         ) {
-            container.registry.refreshInstalled(store)
+            container.registry.refreshInstalled(store, container.distro)
             _reopen.send(app)
         }
         return true
@@ -568,12 +575,12 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val store = configStore(_status.value, _mode.value) ?: return@launch
             val backend = backend() ?: return@launch
-            if (container.registry.installed.value == null) container.registry.refreshInstalled(store)
+            if (container.registry.installed.value == null) container.registry.refreshInstalled(store, container.distro)
             val installed = container.registry.installed.value ?: return@launch
             val pkg = com.daryan.tessera.container.COMPOSITOR_PACKAGE
             if (pkg in installed || container.queue.jobs.value.any { it.active && pkg in it.packages }) return@launch
             container.queue.enqueue("Compositor ($pkg)", listOf(pkg), QueueAction.INSTALL, null, backend, fallback = debianFallback()) {
-                container.registry.refreshInstalled(store)
+                container.registry.refreshInstalled(store, container.distro)
             }
             _messages.send("Installing the compositor; follow it under Installs")
         }
@@ -861,7 +868,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
             }
             addBaseLibraries()
             addMissingGuiHelpers()
-            configStore(_status.value, _mode.value)?.let { container.registry.refreshInstalled(it) }
+            configStore(_status.value, _mode.value)?.let { container.registry.refreshInstalled(it, container.distro) }
             scanSystemApps(force = true)
         }
     }
@@ -874,7 +881,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         if (checkKey() in container.baseLibrariesChecked) return
         val store = configStore(_status.value, _mode.value) ?: return
         val backend = backend() ?: return
-        container.registry.refreshInstalled(store)
+        container.registry.refreshInstalled(store, container.distro)
         // Unread (no Linux yet, or dpkg's status unreadable): check again next time.
         val installed = container.registry.installed.value ?: return
         container.baseLibrariesChecked += checkKey()
@@ -882,7 +889,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         if (missing.isEmpty()) return
         // Names are Debian 13's; what another release or a derivative lacks is skipped.
         container.queue.enqueue("Graphics and app libraries", missing, QueueAction.INSTALL, null, backend, optional = missing.toSet(), fallback = debianFallback()) {
-            container.registry.refreshInstalled(store)
+            container.registry.refreshInstalled(store, container.distro)
         }
     }
 
@@ -896,7 +903,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         val store = configStore(_status.value, _mode.value) ?: return
         val backend = backend() ?: return
         container.guiHelpersChecked += checkKey()
-        container.registry.refreshInstalled(store)
+        container.registry.refreshInstalled(store, container.distro)
         val installed = container.registry.installed.value ?: return
         if ("matchbox-window-manager" !in installed) return
         // And what lets Qt and LibreOffice, where installed, follow the theme, and a desktop's
@@ -905,7 +912,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         val missing = GUI_HELPER_PACKAGES.filterNot { it in installed } + companions
         if (missing.isEmpty()) return
         container.queue.enqueue("Sound, keyboard and theme helpers", missing, QueueAction.INSTALL, null, backend, optional = missing.toSet(), fallback = debianFallback()) {
-            container.registry.refreshInstalled(store)
+            container.registry.refreshInstalled(store, container.distro)
         }
     }
 
@@ -1083,13 +1090,17 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         viewModelScope.launch {
-            // The catalog of the system apps install into: Debian's, or Ubuntu's for Ubuntu.
-            val release = GuestRelease.parse(
-                runCatching { store?.read("/etc/os-release") ?: store?.read("/usr/lib/os-release") }.getOrNull(),
-            )
-            val arch = StoreCatalog.debianArch(Build.SUPPORTED_ABIS.first())
-            container.catalog.load(CatalogSource.forRelease(release, arch), arch, refresh)
-            container.registry.refreshInstalled(store)
+            // The catalog of the system apps install into: Debian's (or Ubuntu's), or Arch's.
+            // The Arch catalog carries official-repo and AUR apps together, with provenance badges.
+            if (container.distro == Distro.ARCH) container.catalog.loadArch(refresh)
+            else {
+                val release = GuestRelease.parse(
+                    runCatching { store?.read("/etc/os-release") ?: store?.read("/usr/lib/os-release") }.getOrNull(),
+                )
+                val arch = StoreCatalog.debianArch(Build.SUPPORTED_ABIS.first())
+                container.catalog.load(CatalogSource.forRelease(release, arch), arch, refresh)
+            }
+            container.registry.refreshInstalled(store, container.distro)
         }
     }
 
@@ -1101,7 +1112,11 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         if (app.source == StoreSource.FLATHUB) container.flathub.icon(app) else container.catalog.iconFile(app)
 
     /** What [app]'s jobs are called in the install queue's package lists. */
-    fun storeJobKey(app: StoreApp) = if (app.source == StoreSource.FLATHUB) flatpakJob(app.id) else app.pkg
+    fun storeJobKey(app: StoreApp) = when {
+        app.source == StoreSource.FLATHUB -> flatpakJob(app.id)
+        container.distro == Distro.ARCH && app.source == StoreSource.AUR -> StoreInstalls.packageBaseFor(app)
+        else -> app.pkg
+    }
 
     /** Flathub's setup job, while it's waiting or running. */
     fun flathubSetupJob(jobs: List<QueueJob>) = jobs.lastOrNull { FLATHUB_SETUP in it.packages }
@@ -1126,7 +1141,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
             script = Flatpak.setupScript(GUI_HELPER_PACKAGES),
         ) {
             if (checkFlathub(store)) container.flathub.load()
-            container.registry.refreshInstalled(store)
+            container.registry.refreshInstalled(store, container.distro)
         }
         return true
     }
@@ -1154,10 +1169,15 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
             ) { container.registry.registerFlatpak(app, store, container.flathub.icon(app)) }
             return true
         }
+        val job = StoreInstalls.storeJobFor(app, container.distro)
         // The helpers are a nicety: one the system lacks mustn't stop the app's own install.
+        // An AUR job is one package base built as `user`; helpers must not join that build.
+        val packages = job.packages + if (job.aur) emptyList() else job.helpers
         container.queue.enqueue(
-            app.name, listOf(app.pkg) + GUI_HELPER_PACKAGES, QueueAction.INSTALL,
-            container.catalog.iconFile(app)?.path, backend, optional = GUI_HELPER_PACKAGES.toSet(), fallback = debianFallback(),
+            if (job.aur) "Building from AUR — output in Installs" else app.name,
+            packages, QueueAction.INSTALL, container.catalog.iconFile(app)?.path, backend,
+            optional = if (job.aur) emptySet() else job.optional,
+            fallback = container.distro == Distro.DEBIAN && debianFallback(), aur = job.aur,
         ) { store?.let { container.registry.register(app, it) } }
         return true
     }
@@ -1173,7 +1193,8 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
             ) { container.registry.unregister(StoreRegistry.idFor(app), store) }
             return true
         }
-        container.queue.enqueue(app.name, listOf(app.pkg), QueueAction.REMOVE, container.catalog.iconFile(app)?.path, backend) {
+        val job = StoreInstalls.storeJobFor(app, container.distro)
+        container.queue.enqueue(app.name, job.packages, QueueAction.REMOVE, container.catalog.iconFile(app)?.path, backend) {
             container.registry.unregister(app, store)
         }
         return true
@@ -1209,7 +1230,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         val store = configStore(_status.value, _mode.value)
         val fromStore = container.registry.isStoreApp(app.id)
         container.queue.enqueue(app.name, app.packages, QueueAction.REMOVE, app.iconFile, backend) {
-            if (fromStore) container.registry.unregister(app.id, store) else container.registry.refreshInstalled(store)
+            if (fromStore) container.registry.unregister(app.id, store) else container.registry.refreshInstalled(store, container.distro)
             scanSystemApps(force = true)
         }
         return true
@@ -1252,7 +1273,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         }
         val helpers = if (app.gui) GUI_HELPER_PACKAGES.filterNot { it in app.packages } else emptyList()
         container.queue.enqueue(app.name, app.packages + helpers, QueueAction.INSTALL, app.iconFile, backend, optional = helpers.toSet(), fallback = debianFallback()) {
-            container.registry.refreshInstalled(store)
+            container.registry.refreshInstalled(store, container.distro)
         }
         return true
     }
@@ -1357,7 +1378,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
             val store = configStore(_status.value, _mode.value)
             container.queue.enqueue(info.pkg, listOf(staged), QueueAction.INSTALL, null, backend) {
                 files.removeStaged(staged)
-                container.registry.refreshInstalled(store)
+                container.registry.refreshInstalled(store, container.distro)
                 scanSystemApps(force = true)
             }
             _messages.send("Installing ${info.pkg}; follow it under Installs")
@@ -1492,12 +1513,12 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun addAdbPackages() {
         val store = configStore(_status.value, _mode.value) ?: return
         val backend = backend() ?: return
-        if (container.registry.installed.value == null) container.registry.refreshInstalled(store)
+        if (container.registry.installed.value == null) container.registry.refreshInstalled(store, container.distro)
         val installed = container.registry.installed.value ?: return
         val missing = PhoneAdb.PACKAGES.filterNot { it in installed }
         if (missing.isEmpty() || container.queue.jobs.value.any { it.active && it.packages == missing }) return
         container.queue.enqueue("adb and fastboot", missing, QueueAction.INSTALL, null, backend, fallback = debianFallback()) {
-            container.registry.refreshInstalled(store)
+            container.registry.refreshInstalled(store, container.distro)
         }
         _messages.send("Installing adb and fastboot; follow it under Installs")
     }
