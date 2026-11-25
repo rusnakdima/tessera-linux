@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 
 /** Extends Termux:X11's application class, which its windows and receivers expect. */
 class LauncherApplication : LorieApp() {
@@ -52,6 +53,12 @@ class LauncherApplication : LorieApp() {
         super.onCreate()
         container = LauncherContainer(this)
         registerActivityLifecycleCallbacks(SessionWindows())
+    }
+
+    /** A distro switch needs a container built around the new paths, without a process restart. */
+    fun rebuildContainer() {
+        if (::container.isInitialized) container.scope.cancel()
+        container = LauncherContainer(this)
     }
 
     /** Dark mode or the wallpaper's colors changed: running apps follow. */
