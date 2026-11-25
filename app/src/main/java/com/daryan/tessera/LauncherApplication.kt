@@ -11,6 +11,7 @@ import com.termux.x11.LorieApp
 import kotlin.math.roundToInt
 import com.daryan.tessera.container.ChrootBackend
 import com.daryan.tessera.container.DroidspacesBackend
+import com.daryan.tessera.container.DistroSelection
 import com.daryan.tessera.container.DroidspacesContainer
 import com.daryan.tessera.container.HostDns
 import com.daryan.tessera.container.FakeProc
@@ -143,8 +144,10 @@ class LauncherApplication : LorieApp() {
  */
 class LauncherContainer(private val app: Application) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    val paths = HostProbe.pathsFor(app)
-    private val prefs = app.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+    private val prefs = app.getSharedPreferences("launcher", android.content.Context.MODE_PRIVATE)
+    /** The active system is read once, at cold start; changing it needs a new container. */
+    val distro = DistroSelection.fromName(prefs.getString(DistroSelection.KEY, null))
+    val paths = HostProbe.pathsFor(app, distro.name.lowercase())
 
     /**
      * What Tessera knows about itself, for the user and for whoever helps them: bound into the

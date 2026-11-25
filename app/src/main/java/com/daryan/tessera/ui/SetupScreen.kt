@@ -62,6 +62,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.daryan.tessera.BackendMode
 import com.daryan.tessera.container.Distro
+import com.daryan.tessera.container.DistroSelection
 import com.daryan.tessera.container.HostStatus
 import com.daryan.tessera.container.InstallState
 
@@ -71,6 +72,11 @@ private enum class ItemState { Done, Todo, Warn }
 fun SetupScreen(
     status: HostStatus?,
     mode: BackendMode,
+    /** The system at cold start; switching one needs a restart. */
+    distro: Distro = Distro.DEBIAN,
+    onDistro: (Distro) -> Unit = {},
+    /** Names of apps currently running, for the switch's confirmation. */
+    runningSessions: List<String> = emptyList(),
     install: InstallState,
     padding: PaddingValues,
     onMode: (BackendMode) -> Unit,
@@ -95,6 +101,7 @@ fun SetupScreen(
     /** What the picked Droidspaces container is being made to do ("Starting web"), while it does it. */
     containerBusy: String? = null,
 ) {
+    var pendingDistro by remember { mutableStateOf<Distro?>(null) }
     LazyColumn(
         contentPadding = PaddingValues(
             start = 16.dp,
@@ -141,11 +148,33 @@ fun SetupScreen(
                 else "This build doesn't include libproot.so yet. See docs/native-binaries.md.",
             )
         }
+        if (mode != BackendMode.DROIDSPACES) item {
+            Text("Linux distribution", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 8.dp, bottom = 8.dp))
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                Distro.entries.forEachIndexed { i, d ->
+                    SegmentedButton(
+                        selected = distro == d,
+                        onClick = {
+                            if (DistroSelection.needsConfirmation(runningSessions.size, distro, d)) pendingDistro = d
+                            else onDistro(d)
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(i, Distro.entries.size),
+                    ) { Text(d.label, maxLines = 1) }
+                }
+            }
+            Text(
+                if (distro == Distro.ARCH)
+                    "Arch Linux ARM: about ${distro.downloadMb} MB to download and about 2.5 GB of free space needed."
+                else "Debian 13: about ${distro.downloadMb} MB to download.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 8.dp, top = 4.dp),
+            )
+        }
         if (mode == BackendMode.DROIDSPACES) {
             item { DroidspacesEngineItem(status) }
             item { DroidspacesContainerItem(status, droidspaces, containerBusy) }
         } else item {
-            val distro = Distro.DEBIAN
             // Each mode has its own system: in app storage for PRoot, under /data/local for chroot.
             val chroot = mode == BackendMode.CHROOT
             val installed = if (chroot) status.chrootRootfs == true else status.prootRootfs
@@ -153,18 +182,18 @@ fun SetupScreen(
                 state = if (installed) ItemState.Done else ItemState.Todo,
                 title = if (chroot) "Linux system (chroot)" else "Linux system",
                 body = when {
-                    installed && chroot -> "${distro.label} is in place at /data/local/linux/debian."
+                    installed && chroot -> "${distro.label} is in place at /data/local/linux/${distro.name.lowercase()}."
                     installed -> "${distro.label} is installed."
                     // A reinstalled Tessera is a new app to Magisk, and a frozen Magisk app (HyperOS
                     // freezes it in the background) shows no prompt: the request just times out.
                     // KernelSU and its forks never prompt: an app not in their list is refused.
                     chroot && status.chrootRootfs == null ->
-                        "Root access wasn't granted, so /data/local/linux/debian couldn't be checked. " +
+                        "Root access wasn't granted, so /data/local/linux/${distro.name.lowercase()} couldn't be checked. " +
                             "Magisk: allow Tessera when it asks; no prompt? Open Magisk first. " +
                             "KernelSU, SukiSU or APatch: turn Tessera on in its Superuser list. Then ask again."
                     install is InstallState.Failed -> "Install failed: ${install.message}"
                     install.running -> "Installing ${distro.label}. You can leave the app; it keeps going."
-                    chroot -> "Chroot mode has no ${distro.label} yet. It's installed as root at /data/local/linux/debian, about ${distro.downloadMb} MB to download."
+                    chroot -> "Chroot mode has no ${distro.label} yet. It's installed as root at /data/local/linux/${distro.name.lowercase()}, about ${distro.downloadMb} MB to download."
                     else -> "${distro.label} isn't installed yet. About ${distro.downloadMb} MB to download."
                 },
             ) {
@@ -177,7 +206,7 @@ fun SetupScreen(
                 } else if (!installed) {
                     InstallControls(install, if (chroot) status.su != null else status.prootBinary, onInstall, onCancelInstall)
                 } else if (chroot) {
-                    RemoveLinux(removingLinux, onRemoveLinux)
+                    RemoveLinux(removingLinux, distro, onRemoveLinux)
                 }
             }
         }
@@ -244,6 +273,20 @@ fun SetupScreen(
             }
         }
     }
+    pendingDistro?.let { next ->
+        AlertDialog(
+            onDismissRequest = { pendingDistro = null },
+            title = { Text("Switch to ${next.label}?") },
+            text = {
+                Text(
+                    "This closes ${runningSessions.joinToString(", ")} and restarts Tessera with " +
+                        "the ${next.label} system. Apps installed in the current Linux system stay there.",
+                )
+            },
+            confirmButton = { TextButton(onClick = { pendingDistro = null; onDistro(next) }) { Text("Switch") } },
+            dismissButton = { TextButton(onClick = { pendingDistro = null }) { Text("Cancel") } },
+        )
+    }
 }
 
 /**
@@ -301,7 +344,7 @@ private fun BackupItem(
  * storage, where Android doesn't look. Says what goes, as there's no getting it back.
  */
 @Composable
-private fun RemoveLinux(removing: Boolean, onRemove: (restoreLimit: Boolean) -> Unit) {
+private fun RemoveLinux(removing: Boolean, distro: Distro, onRemove: (restoreLimit: Boolean) -> Unit) {
     var asking by remember { mutableStateOf(false) }
     var restoreLimit by remember { mutableStateOf(false) }
     val danger = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
@@ -318,7 +361,7 @@ private fun RemoveLinux(removing: Boolean, onRemove: (restoreLimit: Boolean) -> 
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "This deletes /data/local/linux/debian: every Linux app installed in chroot mode, " +
+                    "This deletes /data/local/linux/${distro.name.lowercase()}: every Linux app installed in chroot mode, " +
                         "their settings, and all files in the Linux home folder. It can't be undone. " +
                         "Linux apps open in chroot mode will close. Your phone's own storage isn't touched.",
                 )

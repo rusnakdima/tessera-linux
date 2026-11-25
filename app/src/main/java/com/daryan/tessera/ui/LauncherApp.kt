@@ -76,6 +76,7 @@ import dev.chrisbanes.haze.rememberHazeState
 import com.daryan.tessera.BackendMode
 import com.daryan.tessera.LauncherViewModel
 import com.daryan.tessera.TerminalActivity
+import com.daryan.tessera.container.AppRestart
 import com.daryan.tessera.container.ConfigFile
 import com.daryan.tessera.store.CatalogState
 import com.daryan.tessera.store.StoreApp
@@ -106,8 +107,11 @@ fun LauncherApp(vm: LauncherViewModel = viewModel()) {
     }
     val status by vm.status.collectAsStateWithLifecycle()
     val mode by vm.mode.collectAsStateWithLifecycle()
+    val distro by vm.distro.collectAsStateWithLifecycle()
+    val restartRequested by vm.restartRequested.collectAsStateWithLifecycle()
     val customTabs by vm.tabStore.tabs.collectAsStateWithLifecycle()
     val sessions by vm.sessions.sessions.collectAsStateWithLifecycle()
+    val runningSessionNames = remember(sessions) { sessions.filter { it.running }.map { it.app.name } }
     val install by vm.installState.collectAsStateWithLifecycle()
     val removingLinux by vm.removingLinux.collectAsStateWithLifecycle()
     val containerBusy by vm.containerBusy.collectAsStateWithLifecycle()
@@ -119,6 +123,8 @@ fun LauncherApp(vm: LauncherViewModel = viewModel()) {
         vm.updates.check()
     }
     val context = LocalContext.current
+    // Paths and container state were built for the old distro; rebuild them in a fresh process.
+    LaunchedEffect(restartRequested) { if (restartRequested) AppRestart.schedule(context) }
     val updates by vm.updates.state.collectAsStateWithLifecycle()
     /** The update notice, put off until the launcher is opened again. */
     var updateLater by remember { mutableStateOf(false) }
@@ -600,6 +606,9 @@ fun LauncherApp(vm: LauncherViewModel = viewModel()) {
                 Destination.Setup -> SetupScreen(
                     status = status,
                     mode = mode,
+                    distro = distro,
+                    onDistro = vm::requestDistroSwitch,
+                    runningSessions = runningSessionNames,
                     install = install,
                     padding = padding,
                     onMode = vm::setMode,

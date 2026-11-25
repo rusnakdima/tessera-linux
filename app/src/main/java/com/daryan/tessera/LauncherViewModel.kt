@@ -51,6 +51,7 @@ import com.daryan.tessera.container.DESKTOP_COMPANIONS
 import com.daryan.tessera.container.ThemePack
 import com.daryan.tessera.container.SuConfigStore
 import com.daryan.tessera.container.Distro
+import com.daryan.tessera.container.DistroSelection
 import com.daryan.tessera.container.HostProbe
 import com.daryan.tessera.container.HostStatus
 import com.daryan.tessera.container.InstallState
@@ -134,6 +135,29 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { BackendMode.valueOf(prefs.getString(KEY_MODE, null)!!) }.getOrDefault(BackendMode.PROOT),
     )
     val mode: StateFlow<BackendMode> = _mode
+
+    /** The system installed at cold start; a switch takes effect in the restarted process. */
+    private val _distro = MutableStateFlow(container.distro)
+    val distro: StateFlow<Distro> = _distro
+
+    private val _restartRequested = MutableStateFlow(false)
+    /** Tells the UI to restart the process for a newly selected distro. */
+    val restartRequested: StateFlow<Boolean> = _restartRequested
+
+    /**
+     * Persists a new active distro. The UI asks first when apps are running; if a switch is made
+     * anyway, their sessions must end before the rootfs they live in is replaced.
+     */
+    fun requestDistroSwitch(distro: Distro) {
+        if (distro == container.distro) return
+        if (DistroSelection.needsConfirmation(sessions.sessions.value.count { it.running }, container.distro, distro)) {
+            sessions.stopAll()
+            viewModelScope.launch { _messages.send("Closed running Linux apps to switch to ${distro.label}") }
+        }
+        prefs.edit().putString(DistroSelection.KEY, distro.name).apply()
+        _distro.value = distro
+        _restartRequested.value = true
+    }
 
     /** Apps that ship with the launcher. */
     private val bundled: List<PermissionManifest> = loadApps(app)
@@ -493,7 +517,11 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Installs Linux for the current mode: into app storage for PRoot, as root for chroot. */
-    fun install(distro: Distro = Distro.DEBIAN) {
+    fun install(distro: Distro = container.distro) {
+        if (distro != container.distro) {
+            viewModelScope.launch { _messages.send("Select ${distro.label} first, then install it") }
+            return
+        }
         val su = _status.value?.su
         if (_mode.value == BackendMode.CHROOT && su != null) container.installer.start(distro, su)
         else container.installer.start(distro)
