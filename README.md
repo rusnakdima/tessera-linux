@@ -6,15 +6,16 @@
 
 ### A real Linux desktop's apps on your phone. As easy as installing an app.
 
-Firefox, GIMP, VS Code, LibreOffice, all of Debian **and Flathub** on Android, each with its own
-icon, its own window and its own card in Recents, running on the phone's GPU and wearing the
-phone's own colors. No terminal setup, no VNC, no guides to follow.
+Firefox, GIMP, VS Code, LibreOffice, all of Debian, **Arch Linux ARM** and Flathub on Android,
+each with its own icon, its own window and its own card in Recents, running on the phone's GPU and
+wearing the phone's own colors. No terminal setup, no VNC, no guides to follow.
 
 [![Build](https://github.com/daryan044/tessera-linux/actions/workflows/build.yml/badge.svg)](https://github.com/daryan044/tessera-linux/actions/workflows/build.yml)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 ![Android 7+](https://img.shields.io/badge/Android-7%2B-3DDC84?logo=android&logoColor=white)
 ![Root optional](https://img.shields.io/badge/root-optional-8EE3B8)
 ![Flathub](https://img.shields.io/badge/Flathub-2%2C800%2B%20apps-4A86CF?logo=flathub&logoColor=white)
+![Arch Linux ARM](https://img.shields.io/badge/Arch%20Linux%20ARM-peer%20distro-1794C2?logo=archlinux&logoColor=white)
 ![GPU](https://img.shields.io/badge/GPU-OpenGL%204.6%20%2B%20Vulkan-E2231A)
 
 **[⬇ Download Tessera 0.8.0 (alpha)](https://github.com/daryan044/tessera-linux/releases/download/v0.8.0/tessera-v0.8.0.apk)**
@@ -93,6 +94,16 @@ A file manager across Android and Linux, and a task manager with live CPU and me
 
 </td>
 </tr>
+<tr>
+<td colspan="3" valign="top">
+
+**🐧 Arch Linux ARM, as a peer distro**<br>
+Pick Debian 13 or Arch Linux ARM in Setup. The same launcher, GPU drivers, desktop and Store work
+on either: Arch gets its own rootfs, pacman repos (`core`, `extra`, `community`, `alarm`) and AUR
+builds. No apt fallback, and no pretending x86_64-only AUR packages work on arm64.
+
+</td>
+</tr>
 </table>
 
 ## Screenshots
@@ -142,10 +153,11 @@ Running Linux on a phone has always meant a terminal app, a pile of commands fro
 a VNC viewer showing a whole desktop shrunk to a phone screen, and starting over when something
 breaks. Tessera turns all of that into an app launcher:
 
-1. **Open Tessera and tap Install.** It downloads Debian 13 (digest-verified) and sets it up.
-2. **Pick apps from the Store.** Debian's catalog of nearly 2,000 desktop apps, and with one tap
-   **Flathub's 2,800+**, with icons, screenshots, categories and search. Installs run in the
-   background.
+1. **Open Tessera and tap Install.** Pick Debian 13 (digest-verified) or Arch Linux ARM in Setup,
+   and it downloads that system and sets it up.
+2. **Pick apps from the Store.** Debian's catalog of nearly 2,000 desktop apps, **Arch's repos and
+   AUR**, and with one tap **Flathub's 2,800+**, with search and (where available) icons and
+   screenshots. Installs run in the background.
 3. **Tap an app.** It opens in its own window, like any Android app.
 
 That's it. Everything below happens on its own.
@@ -194,6 +206,29 @@ have. So `flatpak run` simply can't work on a phone. Tessera runs Flathub apps a
   the download speed, and Flathub apps uninstall from the home screen like any other.
 - **Optional, and one tap.** The Store switches between **Debian** and **Flathub**; the first
   time, one button installs flatpak and adds Flathub. 2,800+ arm64 apps, with screenshots.
+
+### 🐧 Arch Linux ARM, alongside Debian
+Setup now offers a second Linux: **Arch Linux ARM (aarch64)**, beside Debian 13. Both use the same
+launcher, windows, GPU drivers, desktop, themes and Store; only the system underneath changes.
+- **Its own rootfs.** The first install downloads the official ALARM aarch64 rootfs from the
+  Arch Linux ARM mirror, about **830 MB compressed**; allow **about 2.5 GB of free space** for it
+  and the packages. Arch lives under its own name, so switching back and forth keeps both systems.
+- **pacman, in the Store.** The Arch store view lists packages from ALARM's `core`, `extra`,
+  `community` and `alarm` repos, with their real descriptions. Installs and removals use `pacman`;
+  Debian's apt and dpkg never run while Arch is selected, and there is no silent cross-distro
+  fallback.
+- **AUR, from source.** AUR packages build on the phone with `makepkg` as the `user` account after
+  `base-devel` and `git` are installed; the build output is shown in Installs if it fails. The
+  build takes a package base from the AUR snapshot, so split packages install the right source.
+  AUR search uses the official RPC (shared IP limit: **4,000 requests per day**), backed by a
+  cached metadata archive.
+- **arm64 only.** Arch and AUR packages are built for aarch64; x86_64-only packages are not
+  offered, and no promise is made for them. Icons are generic for now.
+- **Switching is a clean break.** Changing the distro stops running Linux apps and restarts
+  Tessera, so no session keeps running against the old rootfs. **Droidspaces remain Debian-only**;
+  this adds Arch to Tessera's own rootfs, not to external containers.
+- **Status:** implemented and covered by JVM tests, with a debug APK building; not yet confirmed
+  on a physical device.
 
 ### 🎨 Linux apps that look like Android apps
 Linux apps usually look like a 2010 desktop on a phone. Tessera themes them with **your phone's
@@ -404,8 +439,8 @@ mode with Magisk and with SukiSU.
    (alpha; see the [releases](https://github.com/daryan044/tessera-linux/releases) for notes and
    newer versions), or build it yourself (below). With [Obtainium](https://github.com/ImranR98/Obtainium),
    add this repository's URL and it keeps Tessera up to date from its releases.
-2. Open Tessera, go to **Setup** and install Debian. Allow it to lift the background process
-   limit when asked, so Android doesn't stop your apps.
+2. Open Tessera, go to **Setup** and choose **Debian 13** or **Arch Linux ARM**, then install it.
+   Allow it to lift the background process limit when asked, so Android doesn't stop your apps.
 3. Open the **Store**, install an app, and tap it.
 
 Tessera can't be on Google Play: it targets Android 9's API level on purpose, because newer levels
@@ -421,6 +456,7 @@ makes).
 | Sound, clipboard both ways, automatic keyboard | ✅ Works |
 | Firefox, VS Code, HandBrake | ✅ Work, with GPU acceleration |
 | Store, installs, apps installed with apt or .deb | ✅ Works |
+| Arch Linux ARM peer distro: rootfs, pacman repos, AUR builds, distro switch | 🧪 New; built and unit-tested, not yet confirmed on a phone |
 | New in 0.8.0: .flatpak files, AppImages, backup and restore, Open in Android, media controls, microphone, compositing, update notices | 🧪 New; built and unit-tested, not yet confirmed on a phone |
 | GPU acceleration (Turnip + Zink) in PRoot mode | ✅ Works on Adreno 740 |
 | Chroot mode with root | ✅ Works with Magisk and SukiSU (KernelSU forks since 0.5.5), GPU included |
@@ -448,7 +484,7 @@ flowchart LR
         UI --> SM --> X
     end
     subgraph Box["Container"]
-        Deb["Debian 13"]
+        Deb["Debian 13<br/>or Arch Linux ARM"]
         App["The Linux app"]
         Mesa["Mesa: Turnip + Zink"]
         App --> Mesa
@@ -548,8 +584,15 @@ is a full Debian shell (apt, ssh, git, compilers, servers), PRoot needs no root 
 Andronix, and with root you get a real chroot as well. GUI apps open in their own windows instead
 of a VNC desktop. What it doesn't have is Termux's own add-ons such as Termux:API.
 
-**Which apps work?** Desktop apps from Debian's catalog, Flathub's arm64 apps, and anything you
-install with apt or as a .deb for arm64. Electron apps like VS Code work.
+**Which apps work?** Desktop apps from Debian's catalog, Arch's repos and AUR (arm64 only),
+Flathub's arm64 apps, and anything you install with apt or as a .deb for arm64. Electron apps like
+VS Code work.
+
+**Can I use Arch instead of Debian, or both?** Yes. Setup offers Arch Linux ARM beside Debian 13;
+each has its own rootfs under its own name. The Store switches with the active distro — pacman and
+AUR for Arch, apt and Debian's catalog for Debian — plus Flathub either way. Switching stops
+running Linux apps and restarts Tessera. Droidspaces are still Debian-based containers, separate
+from this choice.
 
 **Flatpak needs bubblewrap. How does Flathub work here?** Flatpak only installs; Tessera runs the
 apps itself, building each one's file system (runtime at /usr, app at /app) with PRoot or a mount
