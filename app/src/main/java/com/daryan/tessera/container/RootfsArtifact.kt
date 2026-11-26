@@ -10,7 +10,8 @@ import java.security.MessageDigest
  * One downloadable rootfs: where it is, how big it is, and the checksum that proves a copy of it
  * is the real one. [key] names the artifact — the Arch tarball is published under a moving name
  * (`arch-aarch64-latest`) and re-published over time, so the key is what a stale cache entry is
- * recognised by, not a content digest.
+ * recognised by, not a content digest. Registry layers set [ociRepo] to the repository their blob
+ * must be fetched from; non-OCI tarballs download [url] directly.
  */
 data class RootfsArtifact(
     val key: String,
@@ -18,13 +19,14 @@ data class RootfsArtifact(
     val size: Long,
     val checksum: String,
     val algorithm: String,
+    val ociRepo: String? = null,
 ) {
     /**
      * True when [file] is a complete copy of this artifact: the right size and the right digest
      * ([algorithm], hex — `MD5` for the Arch tarball, `SHA-256` for a registry layer).
      */
     fun verify(file: File): Boolean {
-        if (file.length() != size) return false
+        if (!file.isFile || file.length() != size) return false
         val digest = MessageDigest.getInstance(algorithm)
         file.inputStream().use { input ->
             val buffer = ByteArray(64 * 1024)

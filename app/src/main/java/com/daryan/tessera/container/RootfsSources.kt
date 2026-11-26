@@ -8,39 +8,47 @@ import java.io.IOException
 
 /**
  * The distro-specific half of a rootfs install: what to fetch for a distro, and how to tell a good
- * copy from a stale cache entry. Debian goes through the OCI registry, and checks the layer's
+ * copy from a stale cache entry. OCI distros go through the registry and check each layer's
  * SHA-256; Arch Linux ARM goes through its published tarball, and checks the MD5 the mirror
  * publishes alongside it.
  */
 object RootfsSources {
     private val registry = OciRegistry()
 
-    /** Maps a registry layer to the artifact that downloads it. */
-    fun fromLayer(layer: Layer): RootfsArtifact = RootfsArtifact(
+    /** Maps a layer from [repo] to the artifact that downloads it. */
+    fun fromLayer(layer: Layer, repo: String = Distro.DEBIAN.repo): RootfsArtifact = RootfsArtifact(
         key = layer.digest,
-        url = "${OciRegistry.REGISTRY_URL}/v2/library/debian/blobs/${layer.digest}",
+        url = "${OciRegistry.REGISTRY_URL}/v2/$repo/blobs/${layer.digest}",
         size = layer.size,
         checksum = layer.digest.substringAfter(':'),
         algorithm = "SHA-256",
+        ociRepo = repo,
     )
 
-    /** Resolves the artifact of [distro]'s rootfs for [abi]. */
-    suspend fun resolve(distro: Distro, abi: Platform): RootfsArtifact = when (distro) {
-        Distro.DEBIAN -> fromLayer(registry.resolve(distro, abi))
-        Distro.ARCH -> arch(distro)
-        Distro.ARCH_X86_64 -> arch(distro)
+    /** Pure mapping from layers to artifacts; keeps their manifest order. */
+    fun artifactsFromLayers(layers: List<Layer>, repo: String): List<RootfsArtifact> =
+        layers.map { fromLayer(it, repo) }
+
+    /** Resolves every artifact of [distro]'s rootfs for [abi], in extraction order. */
+    suspend fun resolveAll(distro: Distro, abi: Platform): List<RootfsArtifact> = when (distro) {
+        Distro.ARCH -> listOf(arch(distro))
+        Distro.DEBIAN, Distro.ARCH_X86_64 -> artifactsFromLayers(registry.resolveAll(distro, abi), distro.repo)
     }
+
+    /** The single artifact of a one-layer distro; multi-layer callers use [resolveAll]. */
+    suspend fun resolve(distro: Distro, abi: Platform): RootfsArtifact = resolveAll(distro, abi).first()
 
     /** Downloads [artifact] to [dest], verifying it against its checksum. */
     suspend fun download(artifact: RootfsArtifact, dest: File, onProgress: (Long) -> Unit) {
-        when (artifact.algorithm) {
-            "SHA-256" -> registry.download(Distro.DEBIAN, Layer(artifact.key, artifact.size), dest) { onProgress(it) }
-            else -> {
-                HttpFetch.download(artifact.url, dest, artifact.size) { onProgress(it) }
-                if (!artifact.verify(dest)) {
-                    dest.delete()
-                    throw IOException("download corrupted: expected ${artifact.checksum}, got ${artifact.algorithm} of ${dest.name}")
-                }
+        val repo = artifact.ociRepo
+        if (repo != null) {
+            // OciRegistry verifies the blob's digest against the layer while streaming it.
+            registry.download(repo, Layer(artifact.key, artifact.size), dest) { onProgress(it) }
+        } else {
+            HttpFetch.download(artifact.url, dest, artifact.size) { onProgress(it) }
+            if (!artifact.verify(dest)) {
+                dest.delete()
+                throw IOException("download corrupted: expected ${artifact.checksum}, got ${artifact.algorithm} of ${dest.name}")
             }
         }
     }

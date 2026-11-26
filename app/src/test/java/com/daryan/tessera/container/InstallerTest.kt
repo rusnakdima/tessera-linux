@@ -3,6 +3,7 @@
 
 package com.daryan.tessera.container
 
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
@@ -54,6 +55,24 @@ class OciRegistryTest {
             """{"layers": [{"mediaType": "a+gzip", "digest": "d", "size": 1}, {"mediaType": "a+gzip", "digest": "e", "size": 1}]}""",
         ).jsonObject
         assertThrows(IOException::class.java) { OciRegistry.singleLayer(two) }
+    }
+}
+
+class InstallerTest {
+    @get:Rule val tmp = TemporaryFolder()
+
+    @Test
+    fun multiLayerResolveAndVerifyRejectsWrongCache() = runBlocking {
+        val layers = listOf(
+            Layer("sha256:aaaa", 134_446_289),
+            Layer("sha256:bbbb", 8_715),
+        )
+        val artifacts = RootfsSources.artifactsFromLayers(layers, "library/archlinux")
+        assertEquals(2, artifacts.size)
+        assertEquals("library/archlinux", artifacts[0].ociRepo)
+        assertEquals("sha256:aaaa".substringAfter(':'), artifacts[0].checksum)
+        val stale = tmp.newFile("stale-aaaa.tar.gz").apply { writeBytes("wrong bytes".toByteArray()) }
+        assertFalse(artifacts[0].verify(stale))
     }
 }
 

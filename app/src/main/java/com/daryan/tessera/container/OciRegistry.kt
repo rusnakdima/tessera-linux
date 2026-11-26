@@ -72,29 +72,41 @@ data class Platform(val architecture: String, val variant: String? = null) {
 data class Layer(val digest: String, val size: Long)
 
 /**
- * Just enough of the registry API to pull a single-layer image: anonymous token, image index,
- * per-platform manifest, then the layer blob. Blobs are content-addressed, so the SHA-256 we
- * check after downloading is the integrity guarantee.
+ * Just enough of the registry API to pull an image: anonymous token, image index, per-platform
+ * manifest, then every layer blob. Blobs are content-addressed, so the SHA-256 we check after
+ * downloading each one is the integrity guarantee.
  */
 class OciRegistry(
     private val registry: String = "https://registry-1.docker.io",
     private val auth: String = "https://auth.docker.io/token?service=registry.docker.io",
 ) {
-    fun resolve(distro: Distro, platform: Platform): Layer {
+    /** The one layer of a single-layer image; multi-layer distros use [resolveAll]. */
+    fun resolve(distro: Distro, platform: Platform): Layer = singleLayer(manifest(distro, platform))
+
+    /** Every gzip layer of [distro]'s image for [platform], in manifest order. */
+    fun resolveAll(distro: Distro, platform: Platform): List<Layer> = layers(manifest(distro, platform))
+
+    private fun manifest(distro: Distro, platform: Platform): JsonObject {
         val token = token(distro.repo)
         val top = getJson("$registry/v2/${distro.repo}/manifests/${distro.tag}", token, MANIFEST_TYPES)
-        val manifest = if ("manifests" in top) {
+        return if ("manifests" in top) {
             val digest = selectManifest(top, platform)
             getJson("$registry/v2/${distro.repo}/manifests/$digest", token, MANIFEST_TYPES)
         } else top
-        return singleLayer(manifest)
     }
 
-    /** Downloads [layer] to [dest], verifying its digest. Calls [onProgress] with bytes so far. */
-    suspend fun download(distro: Distro, layer: Layer, dest: File, onProgress: (Long) -> Unit) {
-        val token = token(distro.repo)
+    /** Downloads [layer] from [distro]'s repository to [dest], verifying its digest. */
+    suspend fun download(distro: Distro, layer: Layer, dest: File, onProgress: (Long) -> Unit) =
+        download(distro.repo, layer, dest, onProgress)
+
+    /**
+     * Downloads [layer] from [repo] to [dest], verifying its digest. Calls [onProgress] with bytes
+     * so far. The caller picks the repository because an artifact carries it (`ociRepo`).
+     */
+    suspend fun download(repo: String, layer: Layer, dest: File, onProgress: (Long) -> Unit) {
+        val token = token(repo)
         // The registry answers with a redirect to a signed CDN URL; follow it without our token.
-        var conn = open("$registry/v2/${distro.repo}/blobs/${layer.digest}", token, null)
+        var conn = open("$registry/v2/$repo/blobs/${layer.digest}", token, null)
         conn.instanceFollowRedirects = false
         var hops = 0
         while (conn.responseCode in 300..399) {
@@ -179,16 +191,29 @@ class OciRegistry(
             return m["digest"]!!.jsonPrimitive.content
         }
 
-        internal fun singleLayer(manifest: JsonObject): Layer {
-            val layers = manifest["layers"]!!.jsonArray.map { it.jsonObject }
-            // Multi-layer images need whiteout handling; the official base images are one layer.
-            if (layers.size != 1) throw IOException("expected a single-layer image, got ${layers.size} layers")
-            val l = layers[0]
-            val type = l["mediaType"]!!.jsonPrimitive.content
-            if (!type.endsWith("tar+gzip") && !type.endsWith("tar.gzip")) {
-                throw IOException("unsupported layer type $type")
+        /** All `tar+gzip` layers of [manifest], in the order the manifest lists them. */
+        internal fun layers(manifest: JsonObject): List<Layer> {
+            val entries = manifest["layers"]?.jsonArray
+                ?: throw IOException("image manifest has no layers")
+            if (entries.isEmpty()) throw IOException("image manifest has no layers")
+            // Whiteout entries (.wh.*) are out of scope: the pinned Arch image's layers only
+            // overwrite earlier files, so extracting in manifest order is enough.
+            return entries.mapIndexed { index, element ->
+                val l = element.jsonObject
+                val type = l["mediaType"]?.jsonPrimitive?.content
+                    ?: throw IOException("layer $index has no media type")
+                if (!type.endsWith("tar+gzip") && !type.endsWith("tar.gzip")) {
+                    throw IOException("unsupported layer type $type")
+                }
+                Layer(l["digest"]!!.jsonPrimitive.content, l["size"]!!.jsonPrimitive.long)
             }
-            return Layer(l["digest"]!!.jsonPrimitive.content, l["size"]!!.jsonPrimitive.long)
+        }
+
+        /** The only layer of a single-layer image (Debian); kept as a delegating alias for callers. */
+        internal fun singleLayer(manifest: JsonObject): Layer {
+            val all = layers(manifest)
+            if (all.size != 1) throw IOException("expected a single-layer image, got ${all.size} layers")
+            return all.single()
         }
     }
 }

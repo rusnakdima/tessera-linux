@@ -15,6 +15,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import java.io.File
 import java.io.IOException
+import java.security.MessageDigest
 
 sealed interface InstallState {
     val running: Boolean get() = false
@@ -63,25 +64,51 @@ class RootfsInstaller(
         job?.cancel()
     }
 
-    /** The distro's image, resolved and verified against its published checksum; kept across failed attempts. */
-    private suspend fun fetch(distro: Distro): Pair<RootfsArtifact, File> {
+    /**
+     * The distro's image layers, resolved and verified against their published checksums; good
+     * cached copies are kept across failed attempts. Returns artifacts and files in layer order.
+     */
+    internal suspend fun fetch(distro: Distro): Pair<List<RootfsArtifact>, List<File>> {
         _state.value = InstallState.Resolving
-        val artifact = RootfsSources.resolve(distro, Platform.forAbi(Build.SUPPORTED_ABIS.first()))
-        val tarball = File(paths.cacheDir, "rootfs-${artifact.key.take(16)}.tar.gz")
-        if (tarball.isFile && artifact.verify(tarball)) return artifact to tarball
-        // A cached copy that no longer verifies is stale: take it aside and download afresh.
-        tarball.delete()
-        if (StatFs(paths.cacheDir.path).availableBytes < artifact.size * 3L) {
-            throw InstallFailure("About 2.5 GB of free space is needed to install Arch", "")
+        val artifacts = RootfsSources.resolveAll(distro, Platform.forAbi(Build.SUPPORTED_ABIS.first()))
+        val combinedKey = combinedKey(distro, artifacts)
+        val total = artifacts.sumOf { it.size }
+        if (StatFs(paths.cacheDir.path).availableBytes < distro.requiredFreeMb * 1024L * 1024L) {
+            throw InstallFailure(
+                "About ${distro.requiredFreeMb} MB of free space is needed to install ${distro.label}", "",
+            )
         }
-        _state.value = InstallState.Downloading(0, artifact.size)
-        try {
-            RootfsSources.download(artifact, tarball) { done -> _state.value = InstallState.Downloading(done, artifact.size) }
-        } catch (e: CancellationException) {
-            File(tarball.path + ".part").delete()
-            throw e
+        val tarballs = artifacts.indices.map { File(paths.cacheDir, "rootfs-$combinedKey-$it.tar.gz") }
+        var done = 0L
+        for ((index, artifact) in artifacts.withIndex()) {
+            val tarball = tarballs[index]
+            if (tarball.isFile && artifact.verify(tarball)) {
+                done += artifact.size
+                _state.value = InstallState.Downloading(done, total)
+                continue
+            }
+            // A cached copy that no longer verifies is stale: delete it and download afresh.
+            tarball.delete()
+            _state.value = InstallState.Downloading(done, total)
+            try {
+                RootfsSources.download(artifact, tarball) { bytes ->
+                    _state.value = InstallState.Downloading(done + bytes, total)
+                }
+            } catch (e: CancellationException) {
+                File(tarball.path + ".part").delete()
+                throw e
+            }
+            done += artifact.size
         }
-        return artifact to tarball
+        return artifacts to tarballs
+    }
+
+    /** One cache identity for the whole image: if any layer changes, no layer is reused. */
+    private fun combinedKey(distro: Distro, artifacts: List<RootfsArtifact>): String {
+        val hash = MessageDigest.getInstance("SHA-256")
+            .digest(artifacts.joinToString("\n") { it.key }.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        return "${distro.name.lowercase()}-${hash.take(16)}"
     }
 
     /**
@@ -90,10 +117,14 @@ class RootfsInstaller(
      * never replaced.
      */
     private suspend fun installChroot(distro: Distro, su: String) {
-        val (artifact, tarball) = fetch(distro)
+        val (artifacts, tarballs) = fetch(distro)
         _state.value = InstallState.Extracting
         val script = File(paths.cacheDir, "chroot-install.sh")
-        script.writeText(ChrootSetup.script(paths.chrootRootfs.path, tarball.path, "${distro.name} ${artifact.key}", distro))
+        script.writeText(
+            ChrootSetup.script(
+                paths.chrootRootfs.path, tarballs.map { it.path }, "${distro.name} ${artifacts.first().key}", distro,
+            ),
+        )
         runInterruptible {
             val proc = ProcessBuilder(su, "-c", "/system/bin/sh ${script.path}").redirectErrorStream(true).start()
             try {
@@ -104,11 +135,11 @@ class RootfsInstaller(
             }
         }
         script.delete()
-        tarball.delete()
+        tarballs.forEach { it.delete() }
     }
 
     private suspend fun install(distro: Distro) {
-        val (artifact, tarball) = fetch(distro)
+        val (artifacts, tarballs) = fetch(distro)
 
         // Extract straight into place: link2symlink records absolute paths, so the tree can't be
         // moved afterwards. The marker file written last is what makes it count as installed.
@@ -118,10 +149,14 @@ class RootfsInstaller(
         root.mkdirs()
         val tar = hostTar()
         try {
-            // Unzipped here, not with tar's -z: toybox runs /system/bin/zcat for that, which
-            // PRoot is refused like tar itself.
-            val (code, output) = runProot(paths.proot.path, paths.prootEnv(), tarball, "--link2symlink", "-0", *tar.argv.toTypedArray(), "-xf", "-", "-C", root.path)
-            if (code != 0) throw prootFailure(code, output, "extract")
+            for (tarball in tarballs) {
+                // Whiteout entries (.wh.*) are out of scope: the pinned Arch image's layers only
+                // overwrite earlier files, so extracting them in manifest order is enough.
+                // Unzipped here, not with tar's -z: toybox runs /system/bin/zcat for that, which
+                // PRoot is refused like tar itself.
+                val (code, output) = runProot(paths.proot.path, paths.prootEnv(), tarball, "--link2symlink", "-0", *tar.argv.toTypedArray(), "-xf", "-", "-C", root.path)
+                if (code != 0) throw prootFailure(code, output, "extract")
+            }
         } finally {
             tar.file.delete()
         }
@@ -130,8 +165,8 @@ class RootfsInstaller(
         // Arch configures itself on first boot; Debian gets the apt tweaks. Both get the shared part.
         if (distro == Distro.ARCH) ArchSetup.configure(paths, root, uid, gid) else RootfsSetup.configure(root, uid, gid, distro)
         FakeProc.write(paths.fakeProcDir)
-        File(root, ContainerPaths.INSTALLED_MARKER).writeText("${distro.name} ${artifact.key}\n")
-        tarball.delete()
+        File(root, ContainerPaths.INSTALLED_MARKER).writeText("${distro.name} ${artifacts.first().key}\n")
+        tarballs.forEach { it.delete() }
     }
 
     /** A program copied out of /system, and the arguments that run it as tar. */
@@ -232,7 +267,15 @@ internal fun prootErrors(output: List<String>): String {
  * and in a directory the app can't write itself.
  */
 object ChrootSetup {
-    fun script(root: String, tarball: String, marker: String, distro: Distro = Distro.DEBIAN): String {
+    /** Convenience for a single-layer image. */
+    fun script(root: String, tarball: String, marker: String, distro: Distro = Distro.DEBIAN): String =
+        script(root, listOf(tarball), marker, distro)
+
+    fun script(root: String, tarballs: List<String>, marker: String, distro: Distro = Distro.DEBIAN): String {
+        require(tarballs.isNotEmpty()) { "at least one tarball is needed" }
+        // Whiteouts (.wh.*) are out of scope; the pinned image's layers only overwrite files, so
+        // unpacking them in order into the same tree gives the final filesystem.
+        val extract = tarballs.joinToString("\n") { "/system/bin/tar -xzf '$it' -C \"\$T\"" }
         val firstBoot = if (distro == Distro.ARCH) {
             """
                 # Arch needs its keyring primed from the ALARM mirror before pacman can install anything.
@@ -273,7 +316,7 @@ object ChrootSetup {
         # Something unusable in the way: keep it aside rather than delete it.
         [ -e "${'$'}R" ] && mv "${'$'}R" "${'$'}R.old-${'$'}(date +%s)"
         rm -rf "${'$'}T"; mkdir -p "${'$'}T"
-        /system/bin/tar -xzf '$tarball' -C "${'$'}T"
+        $extract
         rm -f "${'$'}T/etc/resolv.conf" "${'$'}T/etc/hosts"
         printf '%s' ${shellQuote(HostDns.resolvConf(emptyList()))} > "${'$'}T/etc/resolv.conf"
         printf '127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n' > "${'$'}T/etc/hosts"
