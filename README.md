@@ -6,16 +6,17 @@
 
 ### A real Linux desktop's apps on your phone. As easy as installing an app.
 
-Firefox, GIMP, VS Code, LibreOffice, all of Debian, **Arch Linux ARM** and Flathub on Android,
-each with its own icon, its own window and its own card in Recents, running on the phone's GPU and
-wearing the phone's own colors. No terminal setup, no VNC, no guides to follow.
+Firefox, GIMP, VS Code, LibreOffice, all of Debian, **Arch Linux (x86_64)**, **Arch Linux ARM**
+and Flathub on Android, each with its own icon, its own window and its own card in Recents, running
+on the phone's GPU and wearing the phone's own colors. No terminal setup, no VNC, no guides to
+follow.
 
 [![Build](https://github.com/daryan044/tessera-linux/actions/workflows/build.yml/badge.svg)](https://github.com/daryan044/tessera-linux/actions/workflows/build.yml)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 ![Android 7+](https://img.shields.io/badge/Android-7%2B-3DDC84?logo=android&logoColor=white)
 ![Root optional](https://img.shields.io/badge/root-optional-8EE3B8)
 ![Flathub](https://img.shields.io/badge/Flathub-2%2C800%2B%20apps-4A86CF?logo=flathub&logoColor=white)
-![Arch Linux ARM](https://img.shields.io/badge/Arch%20Linux%20ARM-peer%20distro-1794C2?logo=archlinux&logoColor=white)
+![Arch Linux x86_64 + ARM](https://img.shields.io/badge/Arch%20Linux-x86__64%20%2B%20ARM-1794C2?logo=archlinux&logoColor=white)
 ![GPU](https://img.shields.io/badge/GPU-OpenGL%204.6%20%2B%20Vulkan-E2231A)
 
 **[⬇ Download Tessera 0.8.0 (alpha)](https://github.com/daryan044/tessera-linux/releases/download/v0.8.0/tessera-v0.8.0.apk)**
@@ -97,10 +98,12 @@ A file manager across Android and Linux, and a task manager with live CPU and me
 <tr>
 <td colspan="3" valign="top">
 
-**🐧 Arch Linux ARM, as a peer distro**<br>
-Pick Debian 13 or Arch Linux ARM in Setup. The same launcher, GPU drivers, desktop and Store work
-on either: Arch gets its own rootfs, pacman repos (`core`, `extra`, `community`, `alarm`) and AUR
-builds. No apt fallback, and no pretending x86_64-only AUR packages work on arm64.
+**🐧 Arch Linux (x86_64) and Arch Linux ARM, as peer distros**<br>
+Pick Debian 13, Arch Linux (x86_64) or Arch Linux ARM in Setup. The same launcher, GPU drivers,
+desktop and Store work on either Arch: each gets its own rootfs, pacman repos and AUR builds.
+x86_64 uses the official Arch image and its `core`/`extra` repos; ARM uses ALARM's aarch64 image
+and `core`/`extra`/`community`/`alarm`. No apt fallback, and no pretending x86_64-only AUR
+packages work on arm64. x86_64 Arch runs in PRoot only; chroot stays arm64-only.
 
 </td>
 </tr>
@@ -153,8 +156,8 @@ Running Linux on a phone has always meant a terminal app, a pile of commands fro
 a VNC viewer showing a whole desktop shrunk to a phone screen, and starting over when something
 breaks. Tessera turns all of that into an app launcher:
 
-1. **Open Tessera and tap Install.** Pick Debian 13 (digest-verified) or Arch Linux ARM in Setup,
-   and it downloads that system and sets it up.
+1. **Open Tessera and tap Install.** Pick Debian 13 (digest-verified), Arch Linux (x86_64) or
+   Arch Linux ARM in Setup, and it downloads that system and sets it up.
 2. **Pick apps from the Store.** Debian's catalog of nearly 2,000 desktop apps, **Arch's repos and
    AUR**, and with one tap **Flathub's 2,800+**, with search and (where available) icons and
    screenshots. Installs run in the background.
@@ -207,28 +210,44 @@ have. So `flatpak run` simply can't work on a phone. Tessera runs Flathub apps a
 - **Optional, and one tap.** The Store switches between **Debian** and **Flathub**; the first
   time, one button installs flatpak and adds Flathub. 2,800+ arm64 apps, with screenshots.
 
-### 🐧 Arch Linux ARM, alongside Debian
-Setup now offers a second Linux: **Arch Linux ARM (aarch64)**, beside Debian 13. Both use the same
-launcher, windows, GPU drivers, desktop, themes and Store; only the system underneath changes.
-- **Its own rootfs.** The first install downloads the official ALARM aarch64 rootfs from the
-  Arch Linux ARM mirror, about **830 MB compressed**; allow **about 2.5 GB of free space** for it
-  and the packages. Arch lives under its own name, so switching back and forth keeps both systems.
-- **pacman, in the Store.** The Arch store view lists packages from ALARM's `core`, `extra`,
-  `community` and `alarm` repos, with their real descriptions. Installs and removals use `pacman`;
-  Debian's apt and dpkg never run while Arch is selected, and there is no silent cross-distro
-  fallback.
-- **AUR, from source.** AUR packages build on the phone with `makepkg` as the `user` account after
-  `base-devel` and `git` are installed; the build output is shown in Installs if it fails. The
-  build takes a package base from the AUR snapshot, so split packages install the right source.
-  AUR search uses the official RPC (shared IP limit: **4,000 requests per day**), backed by a
-  cached metadata archive.
-- **arm64 only.** Arch and AUR packages are built for aarch64; x86_64-only packages are not
-  offered, and no promise is made for them. Icons are generic for now.
+### 🐧 Arch Linux (x86_64) and Arch Linux ARM, alongside Debian
+Setup offers three Linux systems: Debian 13, **Arch Linux (x86_64)** and **Arch Linux ARM
+(aarch64)**. They share the launcher, windows, GPU drivers, desktop, themes and Store; only the
+system underneath changes. Each Arch variant is built for one CPU ABI and is only offered on a
+device that can run it — no emulation and no silent swap.
+
+- **Arch Linux (x86_64): official image, PRoot only.** Tessera pulls the official `archlinux`
+  OCI image from Docker Hub, pinned to its image-index digest, as **two compressed layers** verified
+  per layer by SHA-256 while they stream (~**135 MB** to download, ~**411 MB** installed; allow
+  **650 MB** of free space). On first boot it primes the keyring with `pacman-key --init` and
+  `pacman-key --populate archlinux`, keeps the mirrorlist the image ships with, and runs
+  `pacman -Syu --noconfirm` once to create the package databases (implemented; the live first boot
+  is currently unreachable because the install fails during extraction — see Status). The Store
+  reads the official `core` and `extra` repos from `https://geo.mirror.pkgbuild.com`.
+  **PRoot only:** chroot mode is disabled for this variant with the reason *"chroot is arm64-only
+  for Arch"*, so an untested root path can't be shipped.
+- **Arch Linux ARM: ALARM image.** The first install downloads the official ALARM aarch64 rootfs
+  from `https://ca.us.mirror.archlinuxarm.org`, about **830 MB compressed**; allow **about 2.5 GB
+  of free space** for it and the packages. Its first boot runs `pacman-key --populate archlinuxarm`,
+  and the Store reads ALARM's `core`, `extra`, `community` and `alarm` repos.
+- **pacman and the Store, per distro.** Installs and removals use `pacman`; Debian's apt and dpkg
+  never run while an Arch variant is selected, and there is no silent cross-distro fallback.
+  AUR packages build on the phone with `makepkg` as the `user` account after `base-devel` and `git`
+  are installed; the build output is shown in Installs if it fails. The build takes a package base
+  from the AUR snapshot, so split packages install the right source. AUR search uses the official
+  RPC (shared IP limit: **4,000 requests per day**), backed by a cached metadata archive.
+- **Right ABI, right packages.** Arch Linux (x86_64) is offered on x86_64 devices; Arch Linux ARM
+  only on arm64. x86_64-only AUR packages aren't disguised as arm64-compatible. Icons are generic
+  for now.
 - **Switching is a clean break.** Changing the distro stops running Linux apps and restarts
   Tessera, so no session keeps running against the old rootfs. **Droidspaces remain Debian-only**;
   this adds Arch to Tessera's own rootfs, not to external containers.
-- **Status:** implemented and covered by JVM tests, with a debug APK building; not yet confirmed
-  on a physical device.
+- **Status:** both variants build and are covered by JVM tests. On an Android 17 x86_64 tablet
+  emulator the two-layer OCI pull with per-layer digest verification succeeded and the Store
+  loaded 15,598 official `core`/`extra` apps, but the second layer's `etc/os-release` is rejected by
+  Android's toybox tar during PRoot extraction, so the install does not finish and first-boot
+  pacman sync is still unverified. The fix is queued (see [ROADMAP](docs/ROADMAP.md)); ARM behavior
+  on a physical device is unchanged from before.
 
 ### 🎨 Linux apps that look like Android apps
 Linux apps usually look like a 2010 desktop on a phone. Tessera themes them with **your phone's
@@ -430,17 +449,21 @@ with its own Recents card, theme, sound, GPU and per-app permissions.
 
 ## Getting started
 
-**Requirements:** Android 7 or newer, an arm64 phone (32-bit ARM and x86_64 builds exist but are
-untested), a few GB of free storage. GPU acceleration needs a Snapdragon (Adreno) GPU. Root is
-optional. Tested on a Xiaomi 13 Ultra and a Samsung Galaxy S26 Ultra, both on Android 16; chroot
-mode with Magisk and with SukiSU.
+**Requirements:** Android 7 or newer, an arm64 phone, or an x86_64 device for Arch Linux (x86_64)
+in PRoot mode (32-bit ARM builds also exist but are untested), a few GB of free storage. GPU
+acceleration needs a Snapdragon (Adreno) GPU. Root is optional and only adds chroot mode, which is
+arm64-only for Arch. Tested on a Xiaomi 13 Ultra and a Samsung Galaxy S26 Ultra, both on Android
+16 (chroot mode with Magisk and with SukiSU), and on an Android 17 x86_64 12-inch landscape tablet
+emulator with Arch Linux (x86_64) in PRoot mode (setup, Store and the two-layer pull; the install
+itself is blocked by the extraction defect noted in the Status table).
 
 1. Download the APK: [tessera-v0.8.0.apk](https://github.com/daryan044/tessera-linux/releases/download/v0.8.0/tessera-v0.8.0.apk)
    (alpha; see the [releases](https://github.com/daryan044/tessera-linux/releases) for notes and
    newer versions), or build it yourself (below). With [Obtainium](https://github.com/ImranR98/Obtainium),
    add this repository's URL and it keeps Tessera up to date from its releases.
-2. Open Tessera, go to **Setup** and choose **Debian 13** or **Arch Linux ARM**, then install it.
-   Allow it to lift the background process limit when asked, so Android doesn't stop your apps.
+2. Open Tessera, go to **Setup** and choose **Debian 13**, **Arch Linux (x86_64)** or **Arch Linux
+   ARM**, then install it. Setup disables the variants your device's ABI can't run. Allow it to lift
+   the background process limit when asked, so Android doesn't stop your apps.
 3. Open the **Store**, install an app, and tap it.
 
 Tessera can't be on Google Play: it targets Android 9's API level on purpose, because newer levels
@@ -456,7 +479,7 @@ makes).
 | Sound, clipboard both ways, automatic keyboard | ✅ Works |
 | Firefox, VS Code, HandBrake | ✅ Work, with GPU acceleration |
 | Store, installs, apps installed with apt or .deb | ✅ Works |
-| Arch Linux ARM peer distro: rootfs, pacman repos, AUR builds, distro switch | 🧪 New; built and unit-tested, not yet confirmed on a phone |
+| Arch peer distros: rootfs, pacman repos, AUR builds, distro switch | 🧪 New; built and unit-tested. Android 17 x86_64 tablet smoke: two-layer OCI pull and Store core/extra load (15,598 apps) passed; x86_64 PRoot install is currently blocked by a known toybox tar extraction defect, so first-boot pacman sync is unverified; ARM not yet confirmed on a physical device for these changes |
 | New in 0.8.0: .flatpak files, AppImages, backup and restore, Open in Android, media controls, microphone, compositing, update notices | 🧪 New; built and unit-tested, not yet confirmed on a phone |
 | GPU acceleration (Turnip + Zink) in PRoot mode | ✅ Works on Adreno 740 |
 | Chroot mode with root | ✅ Works with Magisk and SukiSU (KernelSU forks since 0.5.5), GPU included |
@@ -484,7 +507,7 @@ flowchart LR
         UI --> SM --> X
     end
     subgraph Box["Container"]
-        Deb["Debian 13<br/>or Arch Linux ARM"]
+        Deb["Debian 13<br/>or Arch Linux (x86_64) / ARM"]
         App["The Linux app"]
         Mesa["Mesa: Turnip + Zink"]
         App --> Mesa
@@ -549,7 +572,7 @@ JDK 17 and the Android SDK with NDK 29.0.14206865 and CMake 3.31.6.
 
 ```
 git submodule update --init           # Termux:X11 fork (third_party/termux-x11)
-scripts/proot/build.sh                # once: builds PRoot into app/src/main/jniLibs
+scripts/proot/build.sh                # once: builds PRoot into app/src/main/jniLibs for arm64 + x86_64
 scripts/x11/build-native.sh           # once, on Linux or WSL: X server + xkb data into build/x11
 sudo scripts/gpu/build-mesa.sh        # optional, on Linux or WSL: the GPU driver
 sudo scripts/usb/build-usb.sh         # optional, on Linux or WSL: the USB bridge
@@ -557,9 +580,22 @@ scripts/theme/build-theme.sh          # optional, anywhere with curl: the GTK th
 ./gradlew assembleDebug testDebugUnitTest
 ```
 
-The native builds need a Linux host (WSL is fine); the app itself builds on Windows, macOS or
-Linux. Builds without the optional parts simply lack GPU acceleration or the USB bridge. More on
-the native pieces: [docs/native-binaries.md](docs/native-binaries.md).
+To include both Arch variants, PRoot must be built for **both** ABIs — the default `arm64-v8a`
+only leaves an x86_64 APK without a container engine. Point the build at NDK 29.0.14206865 and
+select the ABIs explicitly:
+
+```bash
+ANDROID_NDK_HOME=/path/to/ndk/29.0.14206865 ABIS="x86_64 arm64-v8a" JOBS=4 bash scripts/proot/build.sh
+# six files land in app/src/main/jniLibs: libproot.so, libproot-loader.so and
+# libproot-loader32.so under each of x86_64/ and arm64-v8a/
+./gradlew assembleDebug --console=plain
+unzip -l app/build/outputs/apk/debug/app-debug.apk | grep libproot   # six libproot*.so entries
+```
+
+`ANDROID_NDK_HOME` can be replaced by `ANDROID_HOME` plus `NDK_VERSION`; `JOBS` caps parallel
+compiles. The native builds need a Linux host (WSL is fine); the app itself builds on Windows,
+macOS or Linux. Builds without the optional parts simply lack GPU acceleration or the USB bridge.
+More on the native pieces: [docs/native-binaries.md](docs/native-binaries.md).
 
 Debug builds are much slower than releases (Compose runs without its optimizations when an app is
 debuggable). To try performance on a phone with a debug build installed, `./gradlew assembleProfile`
@@ -584,15 +620,17 @@ is a full Debian shell (apt, ssh, git, compilers, servers), PRoot needs no root 
 Andronix, and with root you get a real chroot as well. GUI apps open in their own windows instead
 of a VNC desktop. What it doesn't have is Termux's own add-ons such as Termux:API.
 
-**Which apps work?** Desktop apps from Debian's catalog, Arch's repos and AUR (arm64 only),
+**Which apps work?** Desktop apps from Debian's catalog, the active Arch variant's repos and AUR,
 Flathub's arm64 apps, and anything you install with apt or as a .deb for arm64. Electron apps like
 VS Code work.
 
-**Can I use Arch instead of Debian, or both?** Yes. Setup offers Arch Linux ARM beside Debian 13;
-each has its own rootfs under its own name. The Store switches with the active distro — pacman and
-AUR for Arch, apt and Debian's catalog for Debian — plus Flathub either way. Switching stops
-running Linux apps and restarts Tessera. Droidspaces are still Debian-based containers, separate
-from this choice.
+**Can I use Arch instead of Debian, or both?** Yes. Setup offers Arch Linux (x86_64) and Arch Linux
+ARM beside Debian 13; each has its own rootfs under its own name, and only the variant matching
+your device's ABI can be selected. x86_64 uses the official Arch image and `core`/`extra` and runs
+in PRoot only; ARM uses the ALARM image and `core`/`extra`/`community`/`alarm`. The Store switches
+with the active distro — pacman and AUR for Arch, apt and Debian's catalog for Debian — plus Flathub
+either way. Switching stops running Linux apps and restarts Tessera. Droidspaces are still
+Debian-based containers, separate from this choice.
 
 **Flatpak needs bubblewrap. How does Flathub work here?** Flatpak only installs; Tessera runs the
 apps itself, building each one's file system (runtime at /usr, app at /app) with PRoot or a mount
