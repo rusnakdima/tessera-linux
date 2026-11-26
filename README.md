@@ -219,11 +219,13 @@ device that can run it — no emulation and no silent swap.
 - **Arch Linux (x86_64): official image, PRoot only.** Tessera pulls the official `archlinux`
   OCI image from Docker Hub, pinned to its image-index digest, as **two compressed layers** verified
   per layer by SHA-256 while they stream (~**135 MB** to download, ~**411 MB** installed; allow
-  **650 MB** of free space). On first boot it primes the keyring with `pacman-key --init` and
-  `pacman-key --populate archlinux`, keeps the mirrorlist the image ships with, and runs
-  `pacman -Syu --noconfirm` once to create the package databases (implemented; the live first boot
-  is currently unreachable because the install fails during extraction — see Status). The Store
-  reads the official `core` and `extra` repos from `https://geo.mirror.pkgbuild.com`.
+  **650 MB** of free space). Extraction clears conflicting symlinks between the layers, so both
+  install in order. On first boot it primes the keyring with `pacman-key --init` and
+  `pacman-key --populate archlinux`, keeps the mirrorlist the image ships with, runs PRoot with
+  `--kill-on-exit`, writes Android's DNS into the install-time `resolv.conf`, and calls
+  `pacman -Syu --noconfirm` once to create the package databases. An unassisted install on an
+  Android 17 x86_64 tablet completed, and the `-Syu` transaction created `core.db` and `extra.db`.
+  The Store reads the official `core` and `extra` repos from `https://geo.mirror.pkgbuild.com`.
   **PRoot only:** chroot mode is disabled for this variant with the reason *"chroot is arm64-only
   for Arch"*, so an untested root path can't be shipped.
 - **Arch Linux ARM: ALARM image.** The first install downloads the official ALARM aarch64 rootfs
@@ -243,11 +245,12 @@ device that can run it — no emulation and no silent swap.
   Tessera, so no session keeps running against the old rootfs. **Droidspaces remain Debian-only**;
   this adds Arch to Tessera's own rootfs, not to external containers.
 - **Status:** both variants build and are covered by JVM tests. On an Android 17 x86_64 tablet
-  emulator the two-layer OCI pull with per-layer digest verification succeeded and the Store
-  loaded 15,598 official `core`/`extra` apps, but the second layer's `etc/os-release` is rejected by
-  Android's toybox tar during PRoot extraction, so the install does not finish and first-boot
-  pacman sync is still unverified. The fix is queued (see [ROADMAP](docs/ROADMAP.md)); ARM behavior
-  on a physical device is unchanged from before.
+  emulator the two-layer OCI pull with per-layer digest verification succeeded, extraction cleared
+  the conflicting symlinks between layers, and the unassisted install completed with no manual
+  kill; the Store loaded 15,598 official `core`/`extra` apps and first-boot `pacman -Syu` created
+  `core.db`/`extra.db` and completed its transaction with Android DNS in `resolv.conf`. ARM behavior
+  on a physical device is unchanged from before, so these fixes are not yet confirmed on ARM
+  hardware (see [ROADMAP](docs/ROADMAP.md)).
 
 ### 🎨 Linux apps that look like Android apps
 Linux apps usually look like a 2010 desktop on a phone. Tessera themes them with **your phone's
@@ -454,8 +457,8 @@ in PRoot mode (32-bit ARM builds also exist but are untested), a few GB of free 
 acceleration needs a Snapdragon (Adreno) GPU. Root is optional and only adds chroot mode, which is
 arm64-only for Arch. Tested on a Xiaomi 13 Ultra and a Samsung Galaxy S26 Ultra, both on Android
 16 (chroot mode with Magisk and with SukiSU), and on an Android 17 x86_64 12-inch landscape tablet
-emulator with Arch Linux (x86_64) in PRoot mode (setup, Store and the two-layer pull; the install
-itself is blocked by the extraction defect noted in the Status table).
+emulator with a completed unassisted Arch Linux (x86_64) PRoot install, Store, first-boot
+`pacman -Syu` and two-layer OCI pull.
 
 1. Download the APK: [tessera-v0.8.0.apk](https://github.com/daryan044/tessera-linux/releases/download/v0.8.0/tessera-v0.8.0.apk)
    (alpha; see the [releases](https://github.com/daryan044/tessera-linux/releases) for notes and
@@ -479,7 +482,7 @@ makes).
 | Sound, clipboard both ways, automatic keyboard | ✅ Works |
 | Firefox, VS Code, HandBrake | ✅ Work, with GPU acceleration |
 | Store, installs, apps installed with apt or .deb | ✅ Works |
-| Arch peer distros: rootfs, pacman repos, AUR builds, distro switch | 🧪 New; built and unit-tested. Android 17 x86_64 tablet smoke: two-layer OCI pull and Store core/extra load (15,598 apps) passed; x86_64 PRoot install is currently blocked by a known toybox tar extraction defect, so first-boot pacman sync is unverified; ARM not yet confirmed on a physical device for these changes |
+| Arch peer distros: rootfs, pacman repos, AUR builds, distro switch | 🧪 New; built and unit-tested. Android 17 x86_64 tablet smoke: two-layer OCI pull, unassisted PRoot install, first-boot `pacman -Syu` (created `core.db`/`extra.db`) and Store core/extra load (15,598 apps) all passed; extraction clears conflicting symlinks, first boot uses `--kill-on-exit` and Android DNS; ARM not yet confirmed on a physical device for these changes |
 | New in 0.8.0: .flatpak files, AppImages, backup and restore, Open in Android, media controls, microphone, compositing, update notices | 🧪 New; built and unit-tested, not yet confirmed on a phone |
 | GPU acceleration (Turnip + Zink) in PRoot mode | ✅ Works on Adreno 740 |
 | Chroot mode with root | ✅ Works with Magisk and SukiSU (KernelSU forks since 0.5.5), GPU included |
