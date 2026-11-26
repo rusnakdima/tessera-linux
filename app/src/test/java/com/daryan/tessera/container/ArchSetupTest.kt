@@ -3,11 +3,49 @@
 
 package com.daryan.tessera.container
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
 
 class ArchSetupTest {
+    @get:Rule val tmp = TemporaryFolder()
+
+    @Test fun firstBootArgvKillsLeftoverTracees() {
+        val root = File("/data/user/0/com.daryan.tessera/files/rootfs/arch_x86_64")
+        val argv = ArchSetup.firstBootArgv(root, Distro.ARCH_X86_64)
+        // pacman-key leaves a daemonised gpg-agent behind; without this PRoot waits on it forever.
+        assertEquals("--kill-on-exit", argv.firstOrNull())
+        assertTrue("--link2symlink" in argv)
+        assertTrue("--rootfs=${root.invariantSeparatorsPath}" in argv)
+        assertTrue("--cwd=/" in argv)
+        assertTrue("--bind=/dev" in argv)
+        assertTrue("/bin/sh" in argv)
+        assertTrue("-c" in argv)
+        assertEquals(ArchSetup.firstBootScript(Distro.ARCH_X86_64), argv.lastOrNull())
+    }
+
+    @Test fun firstBootReplacesFallbackDnsWithAndroidServers() {
+        val root = tmp.newFolder("arch-root")
+        ArchSetup.prepare(root, 10483, 10483, listOf("10.0.2.3"))
+        val resolv = File(root, "etc/resolv.conf").readText()
+        assertTrue("nameserver 10.0.2.3" in resolv)
+        assertFalse("1.1.1.1" in resolv)
+        assertFalse("8.8.8.8" in resolv)
+        assertTrue(resolv.startsWith(HostDns.AUTO_MARKER))
+    }
+
+    @Test fun firstBootKeepsPublicDnsOnlyWhenAndroidReportsNone() {
+        val root = tmp.newFolder("arch-no-dns")
+        ArchSetup.prepare(root, 10483, 10483, emptyList())
+        val resolv = File(root, "etc/resolv.conf").readText()
+        assertTrue("nameserver 1.1.1.1" in resolv)
+        assertTrue("nameserver 8.8.8.8" in resolv)
+    }
+
     @Test fun firstBootInitialisesArchLinuxArmKeyring() {
         val script = ArchSetup.firstBootScript()
         assertTrue("pacman-key --init" in script)

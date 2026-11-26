@@ -32,17 +32,46 @@ object ArchSetup {
     """.trimIndent()
 
     /**
-     * [RootfsSetup.configureCommon] plus the Arch first boot for [distro], run through the same
-     * PRoot the tarball extract used: its own `/`, the phone's `/dev` for gpg, and `/bin/sh -c`
-     * for the keyring steps. [paths] supplies the PRoot binary and the host env its runs need.
+     * PRoot's arguments for the first boot, separate from the run so a JVM test can check them.
+     * `--kill-on-exit` is needed here, unlike in a session: `pacman-key` daemonises `gpg-agent`,
+     * and without it PRoot's event loop waits on that tracee forever (and `readLines()` never
+     * sees EOF). Normal and Flatpak sessions deliberately keep their own argv in [ProotBackend].
      */
-    suspend fun configure(paths: ContainerPaths, root: File, uid: Int, gid: Int, distro: Distro = Distro.ARCH) {
+    internal fun firstBootArgv(root: File, distro: Distro = Distro.ARCH): List<String> = listOf(
+        "--kill-on-exit",
+        "--link2symlink", "-0",
+        "--rootfs=${root.invariantSeparatorsPath}", "--cwd=/", "--bind=/dev",
+        "/bin/sh", "-c", firstBootScript(distro),
+    )
+
+    /**
+     * The plain-file part of first boot. [RootfsSetup.configureCommon] starts with the public DNS
+     * fallback; Android's own [servers] go in before pacman runs, so `pacman -Syu` can reach the
+     * mirror during install. The marker stays, so sessions may refresh it as the network changes.
+     * Kept apart from PRoot so it can be tested on the JVM.
+     */
+    internal fun prepare(root: File, uid: Int, gid: Int, servers: List<String>) {
         RootfsSetup.configureCommon(root, uid, gid)
+        HostDns.refresh(File(root, "etc/resolv.conf"), servers)
+    }
+
+    /**
+     * [prepare] plus the Arch first boot for [distro], run through the same PRoot the tarball
+     * extract used: its own `/`, the phone's `/dev` for gpg, and `/bin/sh -c` for the keyring
+     * steps. [paths] supplies the PRoot binary and the host env its runs need; [dns] is Android's
+     * current name servers, consulted once here rather than only at the first session's start.
+     */
+    suspend fun configure(
+        paths: ContainerPaths,
+        root: File,
+        uid: Int,
+        gid: Int,
+        distro: Distro = Distro.ARCH,
+        dns: () -> List<String> = { emptyList() },
+    ) {
+        prepare(root, uid, gid, dns())
         val (code, output) = runProot(
-            paths.proot.path, paths.prootEnv(), null,
-            "--link2symlink", "-0",
-            "--rootfs=${root.invariantSeparatorsPath}", "--cwd=/", "--bind=/dev",
-            "/bin/sh", "-c", firstBootScript(distro),
+            paths.proot.path, paths.prootEnv(), null, *firstBootArgv(root, distro).toTypedArray(),
         )
         if (code != 0) throw prootFailure(code, output, "first boot")
     }

@@ -173,7 +173,10 @@ class LauncherContainer(private val app: Application) {
     val flathub = com.daryan.tessera.store.FlathubCatalog(java.io.File(app.filesDir, "store"), scope)
     val screenshots = com.daryan.tessera.store.Screenshots(java.io.File(app.cacheDir, "screenshots"))
     val registry = StoreRegistry(java.io.File(app.filesDir, "apps"), catalog, distro)
-    val installer = RootfsInstaller(paths, OciRegistry(), scope, Process.myUid(), Process.myUid())
+    val installer = RootfsInstaller(
+        paths, OciRegistry(), scope, Process.myUid(), Process.myUid(),
+        dns = { com.daryan.tessera.container.HostDns.servers(app) },
+    )
 
     val queue = InstallQueue(scope, paths, distro)
     /** Commands the user put on the launcher as icons (the Shortcuts tab). */

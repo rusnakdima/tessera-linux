@@ -40,6 +40,8 @@ class RootfsInstaller(
     private val scope: CoroutineScope,
     private val uid: Int,
     private val gid: Int,
+    /** Android's DNS servers now; Arch's first boot needs them while pacman still runs here. */
+    private val dns: () -> List<String> = { emptyList() },
 ) {
     private val _state = MutableStateFlow<InstallState>(InstallState.Idle)
     val state: StateFlow<InstallState> = _state
@@ -168,7 +170,8 @@ class RootfsInstaller(
 
         _state.value = InstallState.Configuring
         // Arch configures itself on first boot; Debian gets the apt tweaks. Both get the shared part.
-        if (distro.isArch) ArchSetup.configure(paths, root, uid, gid, distro) else RootfsSetup.configure(root, uid, gid, distro)
+        if (distro.isArch) ArchSetup.configure(paths, root, uid, gid, distro, dns)
+        else RootfsSetup.configure(root, uid, gid, distro)
         FakeProc.write(paths.fakeProcDir)
         File(root, ContainerPaths.INSTALLED_MARKER).writeText("${distro.name} ${artifacts.first().key}\n")
         tarballs.forEach { it.delete() }
