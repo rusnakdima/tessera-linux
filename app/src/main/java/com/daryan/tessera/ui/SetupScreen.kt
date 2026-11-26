@@ -63,8 +63,11 @@ import androidx.compose.ui.unit.dp
 import com.daryan.tessera.BackendMode
 import com.daryan.tessera.container.Distro
 import com.daryan.tessera.container.DistroSelection
+import com.daryan.tessera.container.HostProbe
 import com.daryan.tessera.container.HostStatus
 import com.daryan.tessera.container.InstallState
+import com.daryan.tessera.container.installProblem
+import com.daryan.tessera.container.supportedOn
 
 private enum class ItemState { Done, Todo, Warn }
 
@@ -149,12 +152,19 @@ fun SetupScreen(
             )
         }
         if (mode != BackendMode.DROIDSPACES) item {
+            val abi = Build.SUPPORTED_ABIS.first()
+            // A distro is unavailable either on the wrong ABI or in a backend it can't use.
+            fun Distro.unavailableReason(): String? = installProblem(mode)
+                ?: if (!supportedOn(abi)) "$label needs ${if (this == Distro.ARCH) "an arm64" else "an x86_64"} device."
+                else null
             Text("Linux distribution", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 8.dp, bottom = 8.dp))
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 Distro.entries.forEachIndexed { i, d ->
                     SegmentedButton(
                         selected = distro == d,
+                        enabled = d.supportedOn(abi) && d.installProblem(mode) == null,
                         onClick = {
+                            if (d.unavailableReason() != null) return@SegmentedButton
                             if (DistroSelection.needsConfirmation(runningSessions.size, distro, d)) pendingDistro = d
                             else onDistro(d)
                         },
@@ -163,13 +173,26 @@ fun SetupScreen(
                 }
             }
             Text(
-                if (distro == Distro.ARCH)
-                    "Arch Linux ARM: about ${distro.downloadMb} MB to download and about 2.5 GB of free space needed."
-                else "Debian 13: about ${distro.downloadMb} MB to download.",
+                when (distro) {
+                    Distro.ARCH -> "Arch Linux ARM: about ${distro.downloadMb} MB to download and about 2.5 GB of free space needed."
+                    Distro.ARCH_X86_64 ->
+                        "Arch Linux (x86_64): about ${distro.downloadMb} MB to download, " +
+                            "about ${distro.installedMb} MB installed and ${distro.requiredFreeMb} MB of free space needed."
+                    else -> "Debian 13: about ${distro.downloadMb} MB to download."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 8.dp, top = 4.dp),
             )
+            val reasons = Distro.entries.mapNotNull { it.unavailableReason() }.distinct()
+            if (reasons.isNotEmpty()) {
+                Text(
+                    reasons.joinToString(" "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(start = 8.dp, top = 2.dp),
+                )
+            }
         }
         if (mode == BackendMode.DROIDSPACES) {
             item { DroidspacesEngineItem(status) }
@@ -177,23 +200,24 @@ fun SetupScreen(
         } else item {
             // Each mode has its own system: in app storage for PRoot, under /data/local for chroot.
             val chroot = mode == BackendMode.CHROOT
+            val chrootPath = HostProbe.pathsFor(LocalContext.current, distro.name.lowercase()).chrootRootfs.path
             val installed = if (chroot) status.chrootRootfs == true else status.prootRootfs
             SetupItem(
                 state = if (installed) ItemState.Done else ItemState.Todo,
                 title = if (chroot) "Linux system (chroot)" else "Linux system",
                 body = when {
-                    installed && chroot -> "${distro.label} is in place at /data/local/linux/${distro.name.lowercase()}."
+                    installed && chroot -> "${distro.label} is in place at $chrootPath."
                     installed -> "${distro.label} is installed."
                     // A reinstalled Tessera is a new app to Magisk, and a frozen Magisk app (HyperOS
                     // freezes it in the background) shows no prompt: the request just times out.
                     // KernelSU and its forks never prompt: an app not in their list is refused.
                     chroot && status.chrootRootfs == null ->
-                        "Root access wasn't granted, so /data/local/linux/${distro.name.lowercase()} couldn't be checked. " +
+                        "Root access wasn't granted, so $chrootPath couldn't be checked. " +
                             "Magisk: allow Tessera when it asks; no prompt? Open Magisk first. " +
                             "KernelSU, SukiSU or APatch: turn Tessera on in its Superuser list. Then ask again."
                     install is InstallState.Failed -> "Install failed: ${install.message}"
                     install.running -> "Installing ${distro.label}. You can leave the app; it keeps going."
-                    chroot -> "Chroot mode has no ${distro.label} yet. It's installed as root at /data/local/linux/${distro.name.lowercase()}, about ${distro.downloadMb} MB to download."
+                    chroot -> "Chroot mode has no ${distro.label} yet. It's installed as root at $chrootPath, about ${distro.downloadMb} MB to download."
                     else -> "${distro.label} isn't installed yet. About ${distro.downloadMb} MB to download."
                 },
             ) {
@@ -347,6 +371,7 @@ private fun BackupItem(
 private fun RemoveLinux(removing: Boolean, distro: Distro, onRemove: (restoreLimit: Boolean) -> Unit) {
     var asking by remember { mutableStateOf(false) }
     var restoreLimit by remember { mutableStateOf(false) }
+    val chrootPath = HostProbe.pathsFor(LocalContext.current, distro.name.lowercase()).chrootRootfs.path
     val danger = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
     TextButton(
         onClick = { asking = true },
@@ -361,7 +386,7 @@ private fun RemoveLinux(removing: Boolean, distro: Distro, onRemove: (restoreLim
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "This deletes /data/local/linux/${distro.name.lowercase()}: every Linux app installed in chroot mode, " +
+                    "This deletes $chrootPath: every Linux app installed in chroot mode, " +
                         "their settings, and all files in the Linux home folder. It can't be undone. " +
                         "Linux apps open in chroot mode will close. Your phone's own storage isn't touched.",
                 )

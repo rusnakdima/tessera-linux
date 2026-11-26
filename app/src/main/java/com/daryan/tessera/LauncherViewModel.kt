@@ -49,6 +49,8 @@ import com.daryan.tessera.container.SuConfigStore
 import com.daryan.tessera.container.Distro
 import com.daryan.tessera.container.isArch
 import com.daryan.tessera.container.DistroSelection
+import com.daryan.tessera.container.installProblem
+import com.daryan.tessera.container.supportedOn
 import com.daryan.tessera.container.AutoInstalls
 import com.daryan.tessera.container.HostProbe
 import com.daryan.tessera.container.HostStatus
@@ -148,6 +150,17 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun requestDistroSwitch(distro: Distro) {
         if (distro == container.distro) return
+        // No silent swap to a rootfs this device or backend can't run.
+        if (!distro.supportedOn(Build.SUPPORTED_ABIS.first())) {
+            viewModelScope.launch {
+                _messages.send("${distro.label} needs an ${if (distro == Distro.ARCH) "arm64" else "x86_64"} device")
+            }
+            return
+        }
+        distro.installProblem(_mode.value)?.let { problem ->
+            viewModelScope.launch { _messages.send(problem) }
+            return
+        }
         if (DistroSelection.needsConfirmation(sessions.sessions.value.count { it.running }, container.distro, distro)) {
             sessions.stopAll()
             viewModelScope.launch { _messages.send("Closed running Linux apps to switch to ${distro.label}") }
@@ -532,6 +545,10 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     fun install(distro: Distro = container.distro) {
         if (distro != container.distro) {
             viewModelScope.launch { _messages.send("Select ${distro.label} first, then install it") }
+            return
+        }
+        distro.installProblem(_mode.value)?.let { problem ->
+            viewModelScope.launch { _messages.send(problem) }
             return
         }
         val su = _status.value?.su

@@ -4,6 +4,7 @@
 package com.daryan.tessera.container
 
 import android.content.SharedPreferences
+import com.daryan.tessera.BackendMode
 
 /**
  * The distribution Tessera installs into and launches apps from. Changing it needs a cold start:
@@ -26,4 +27,13 @@ object DistroSelection {
      */
     fun save(editor: SharedPreferences.Editor, distro: Distro): Boolean =
         editor.putString(KEY, distro.name).commit()
+}
+
+/**
+ * Why a distro can't be installed in [mode], or null when the combination is allowed.
+ * The x86_64 Arch rootfs is only exercised under PRoot; chroot is arm64-only for Arch.
+ */
+fun Distro.installProblem(mode: BackendMode): String? = when {
+    this == Distro.ARCH_X86_64 && mode == BackendMode.CHROOT -> "chroot is arm64-only for Arch"
+    else -> null
 }

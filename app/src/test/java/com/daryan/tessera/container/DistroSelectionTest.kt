@@ -4,8 +4,10 @@
 package com.daryan.tessera.container
 
 import android.content.SharedPreferences
+import com.daryan.tessera.BackendMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.lang.reflect.Proxy
@@ -64,6 +66,16 @@ class DistroSelectionTest {
         assertTrue(Distro.ARCH.isArch)
         assertTrue(Distro.ARCH_X86_64.isArch)
         assertFalse(Distro.DEBIAN.isArch)
+    }
+
+    // BackendMode is declared in com.daryan.tessera (LauncherViewModel.kt), not in .container;
+    // its values are PROOT, CHROOT and DROIDSPACES.
+    @Test
+    fun x8664InstallRejectsChroot() {
+        assertEquals("chroot is arm64-only for Arch", Distro.ARCH_X86_64.installProblem(BackendMode.CHROOT))
+        assertNull(Distro.ARCH_X86_64.installProblem(BackendMode.PROOT))
+        assertNull(Distro.ARCH.installProblem(BackendMode.CHROOT))
+        assertNull(Distro.DEBIAN.installProblem(BackendMode.CHROOT))
     }
 
     private fun fakeEditor(calls: MutableList<String>, commitResult: Boolean): SharedPreferences.Editor =
