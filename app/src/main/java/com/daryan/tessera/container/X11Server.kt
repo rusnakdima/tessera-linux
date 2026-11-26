@@ -12,16 +12,35 @@ import kotlinx.coroutines.delay
 import java.io.File
 import java.io.IOException
 
+/** The X server and window operations [SessionManager] needs; fakeable in JVM tests. */
+interface X11 {
+    suspend fun start(session: Session): Process
+    fun showWindow(session: Session, windowId: Long? = null)
+    fun closeWindow(session: Session)
+}
+
 /**
  * One Termux:X11 server per GUI session: its own display number, its own socket in the
  * session's private /tmp, and its own Android window (a tagged MainActivity document).
  */
-class X11Server(private val context: Context, private val paths: ContainerPaths) {
+class X11Server(
+    private val context: Context,
+    private val paths: ContainerPaths,
+    /** Reads assets/xkb/VERSION; a seam so JVM tests can model a build without generated data. */
+    private val xkbVersion: () -> String = {
+        context.assets.open("xkb/VERSION").bufferedReader().use { it.readText().trim() }
+    },
+    /** Starts the X process; a seam so JVM tests can assert none was spawned. */
+    private val startServer: (ProcessBuilder) -> Process = { it.start() },
+) : X11 {
 
     /** Starts the server for [session]. Returns once its socket accepts connections. */
-    suspend fun start(session: Session): Process {
+    override suspend fun start(session: Session): Process {
+        // Check first, and name everything missing in one message: a build that skipped the
+        // generator has neither artifact, and one at a time wastes a launch attempt per error.
+        val bundledXkb = preflight()
         val display = session.display ?: throw IllegalArgumentException("session has no display")
-        val xkb = installXkb()
+        val xkb = installXkb(bundledXkb)
         // In chroot mode clients run as uid 1000, not as the app; let them reach the socket.
         paths.x11SocketDir(session).apply {
             mkdirs()
@@ -44,7 +63,7 @@ class X11Server(private val context: Context, private val paths: ContainerPaths)
             environment()["XLORIE_LIBRARY"] = File(paths.nativeLibDir, "libXlorie.so").path
             environment()["TMPDIR"] = paths.sessionTmp(session).path
             environment()["XKB_CONFIG_ROOT"] = xkb.path
-        }.start()
+        }.let(startServer)
         val logReader = Thread({
             proc.inputStream.use { input ->
                 val bytes = ByteArray(1024)
@@ -77,6 +96,23 @@ class X11Server(private val context: Context, private val paths: ContainerPaths)
         throw IOException("X server didn't create $socket within 5 s: ${logTail()}")
     }
 
+    /**
+     * Both generated artifacts must be in the APK before any process or session work. Reports all
+     * that are missing together, so the user gets one actionable error instead of a crash later.
+     */
+    private fun preflight(): String {
+        val bundled = runCatching(xkbVersion).getOrNull()
+        val nativeLib = File(paths.nativeLibDir, "libXlorie.so")
+        val missing = buildList {
+            if (bundled == null) add("assets/xkb/VERSION")
+            if (!nativeLib.exists()) add("libXlorie.so")
+        }
+        if (missing.isNotEmpty()) throw IOException(
+            "missing X11 artifacts: ${missing.joinToString(", ")}; run scripts/x11/build-native.sh and rebuild the app",
+        )
+        return bundled!!
+    }
+
     private fun accepts(socket: File): Boolean = runCatching {
         android.net.LocalSocket().use { it.connect(android.net.LocalSocketAddress(socket.path, android.net.LocalSocketAddress.Namespace.FILESYSTEM)) }
     }.isSuccess
@@ -85,7 +121,7 @@ class X11Server(private val context: Context, private val paths: ContainerPaths)
      * Opens (or brings back) the session's window, or with [windowId] the window of one of
      * its app's X windows: a task of its own, sharing the session's server.
      */
-    fun showWindow(session: Session, windowId: Long? = null) {
+    override fun showWindow(session: Session, windowId: Long?) {
         val path = windowId?.let { "/$it" } ?: ""
         context.startActivity(
             Intent().setClassName(context, TAGGED_WINDOW)
@@ -95,18 +131,15 @@ class X11Server(private val context: Context, private val paths: ContainerPaths)
     }
 
     /** Closes the session's window; the server itself is stopped by destroying its process. */
-    fun closeWindow(session: Session) {
+    override fun closeWindow(session: Session) {
         (context.applicationContext as? LorieApp)?.onBroadcastReceive(
             Intent(ACTION_STOP).putExtra(CmdEntryPoint.EXTRA_DOCUMENT_TAG, windowTag(session)),
         )
     }
 
     /** Copies the bundled xkb data out of the APK once per version; the server reads it as files. */
-    private fun installXkb(): File {
+    private fun installXkb(bundled: String): File {
         val dir = File(paths.filesDir, "xkb")
-        val bundled = runCatching {
-            context.assets.open("xkb/VERSION").bufferedReader().use { it.readText().trim() }
-        }.getOrNull() ?: throw IOException("this build has no xkb data; run scripts/x11/build-native.sh")
         val marker = File(dir, "VERSION")
         if (marker.takeIf { it.exists() }?.readText()?.trim() == bundled) return dir
 

@@ -10,6 +10,7 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -78,12 +79,14 @@ class SessionManager(
     private val appearance: AppearanceSettings? = null,
     /** Imported Linux themes, one of which [appearance] may name. */
     private val linuxThemes: LinuxThemes? = null,
+    /** The X server/window operations; overridable so JVM tests can inject a fake. */
+    private val x11: X11 = X11Server(context, paths),
+    /** Dispatcher for Android window calls; Dispatchers.Main in the app, overridable in tests. */
+    private val main: CoroutineDispatcher = Dispatchers.Main,
 ) {
     private val nextId = AtomicInteger(1)
     private val _sessions = MutableStateFlow<List<RunningSession>>(emptyList())
     val sessions: StateFlow<List<RunningSession>> = _sessions
-
-    private val x11 = X11Server(context, paths)
 
     init {
         // Droidspaces bind-mounts this directory at container boot. Keep its inode stable: deleting
@@ -283,7 +286,9 @@ class SessionManager(
                 followWindows(session, ownTasks = !app.desktop)
                 audio?.let { launch { it.run() } }
                 mic?.let { launch { it.run() } }
-                withContext(Dispatchers.Main) { x11.showWindow(session) }
+                // A window that can't open (no native library) must not take the launch down.
+                runCatching { withContext(main) { x11.showWindow(session) } }
+                    .onFailure { Log.w(TAG, "couldn't open the window for ${session.id}", it) }
                 awaitWindow(session)
                 val pid = IntArray(1)
                 val fd = try {
@@ -316,7 +321,11 @@ class SessionManager(
                 killDetached(session.id, done = true)
                 servers.remove(session.id)?.destroy()
                 usbDevices.remove(session.id)?.close()
-                withContext(Dispatchers.Main + NonCancellable) { x11.closeWindow(session) }
+                // LorieApp forces System.loadLibrary("Xlorie") here. On a build without that
+                // library the Error (not an Exception) would otherwise escape the coroutine,
+                // and with it the app. Cleanup failure is only worth a warning.
+                runCatching { withContext(main + NonCancellable) { x11.closeWindow(session) } }
+                    .onFailure { Log.w(TAG, "couldn't close the window for ${session.id}", it) }
             }
         }
         return RunningSession(session, app, backend.name, pid = 0)
@@ -365,7 +374,9 @@ class SessionManager(
     private suspend fun awaitWindow(session: Session) {
         val tag = X11Server.windowTag(session)
         val connected = kotlinx.coroutines.withTimeoutOrNull(3000) {
-            while (withContext(Dispatchers.Main) { com.termux.x11.MainActivity.getInstance(tag)?.lorieView?.connected() } != true) {
+            while (runCatching {
+                withContext(main) { com.termux.x11.MainActivity.getInstance(tag)?.lorieView?.connected() }
+            }.getOrNull() != true) {
                 kotlinx.coroutines.delay(50)
             }
             true
@@ -501,7 +512,7 @@ class SessionManager(
             withTimeoutOrNull(RESTART_WAIT_MS) {
                 _sessions.first { list -> list.none { it.session.id == id && it.running } }
             }
-            withContext(Dispatchers.Main) { start() }
+            withContext(main) { start() }
         }
     }
 
@@ -539,7 +550,7 @@ class SessionManager(
             tasks.retainAll(windows.main.map { it.id }.toSet())
             val fresh = windows.main.filter { it.id != primary && it.id !in tasks }
             tasks += fresh.map { it.id }
-            if (fresh.isNotEmpty()) scope.launch(Dispatchers.Main) { fresh.forEach { x11.showWindow(session, it.id) } }
+            if (fresh.isNotEmpty()) scope.launch(main) { fresh.forEach { x11.showWindow(session, it.id) } }
         }
         windowReports[session.id] = reports
         reports.startWatching()

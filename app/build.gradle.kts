@@ -108,6 +108,12 @@ android {
     lint {
         disable += "ExpiredTargetSdkVersion"
     }
+
+    testOptions {
+        // JVM unit tests exercise SessionManager/X11Server logic against stubbed android.jar;
+        // returning default values keeps framework no-ops (Log, Handler, Looper) from throwing.
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
