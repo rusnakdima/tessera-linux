@@ -28,6 +28,7 @@ object RootfsSources {
     suspend fun resolve(distro: Distro, abi: Platform): RootfsArtifact = when (distro) {
         Distro.DEBIAN -> fromLayer(registry.resolve(distro, abi))
         Distro.ARCH -> arch(distro)
+        Distro.ARCH_X86_64 -> arch(distro)
     }
 
     /** Downloads [artifact] to [dest], verifying it against its checksum. */

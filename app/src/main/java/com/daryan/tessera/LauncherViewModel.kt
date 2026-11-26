@@ -509,7 +509,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     /** Finds the package with [missing] and installs it, in the queue; false when no system is ready. */
     fun installMissing(app: PermissionManifest, missing: Missing): Boolean {
         // The missing-program probe reads Debian's dpkg file lists; Arch has no equivalent here.
-        if (container.distro == Distro.ARCH) {
+        if (container.distro == Distro.ARCH || container.distro == Distro.ARCH_X86_64) {
             viewModelScope.launch { _messages.send("Install that from the Arch Store; automatic detection is Debian-only") }
             return false
         }
@@ -1093,7 +1093,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             // The catalog of the system apps install into: Debian's (or Ubuntu's), or Arch's.
             // The Arch catalog carries official-repo and AUR apps together, with provenance badges.
-            if (container.distro == Distro.ARCH) container.catalog.loadArch(refresh)
+            if (container.distro == Distro.ARCH || container.distro == Distro.ARCH_X86_64) container.catalog.loadArch(refresh)
             else {
                 val release = GuestRelease.parse(
                     runCatching { store?.read("/etc/os-release") ?: store?.read("/usr/lib/os-release") }.getOrNull(),
@@ -1115,7 +1115,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     /** What [app]'s jobs are called in the install queue's package lists. */
     fun storeJobKey(app: StoreApp) = when {
         app.source == StoreSource.FLATHUB -> flatpakJob(app.id)
-        container.distro == Distro.ARCH && app.source == StoreSource.AUR -> StoreInstalls.packageBaseFor(app)
+        (container.distro == Distro.ARCH || container.distro == Distro.ARCH_X86_64) && app.source == StoreSource.AUR -> StoreInstalls.packageBaseFor(app)
         else -> app.pkg
     }
 

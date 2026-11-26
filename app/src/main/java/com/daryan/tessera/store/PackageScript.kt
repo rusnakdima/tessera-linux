@@ -29,6 +29,7 @@ interface PackageScript {
         fun forDistro(distro: Distro): PackageScript = when (distro) {
             Distro.DEBIAN -> AptScript
             Distro.ARCH -> PacmanScript
+            Distro.ARCH_X86_64 -> PacmanScript
         }
     }
 }

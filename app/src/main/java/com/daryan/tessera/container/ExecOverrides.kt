@@ -72,7 +72,7 @@ object DistroExec {
     private val ARCH = mapOf("firefox-esr" to listOf("/usr/bin/firefox"))
 
     fun forPackage(distro: Distro, pkg: String): List<String>? =
-        if (distro == Distro.ARCH) ARCH[pkg] else null
+        if (distro == Distro.ARCH || distro == Distro.ARCH_X86_64) ARCH[pkg] else null
 }
 
 /**

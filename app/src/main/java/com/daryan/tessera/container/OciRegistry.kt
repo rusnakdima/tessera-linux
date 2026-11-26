@@ -18,10 +18,42 @@ import java.net.URL
 import java.net.URLEncoder
 import java.security.MessageDigest
 
-/** A distribution we can install: Debian from its official OCI image, Arch Linux ARM from its published tarball. */
-enum class Distro(val label: String, val repo: String, val tag: String, val downloadMb: Int) {
-    DEBIAN("Debian 13", "library/debian", "trixie", 50),
-    ARCH("Arch Linux ARM", "archlinuxarm", "aarch64", 830),
+/**
+ * A distribution we can install: Debian from its official OCI image, Arch Linux ARM from its
+ * published tarball, and Arch Linux x86_64 from the official OCI index pinned by digest.
+ */
+enum class Distro(
+    val label: String,
+    val repo: String,
+    val tag: String,
+    val downloadMb: Int,
+    val installedMb: Int,
+    val requiredFreeMb: Int,
+) {
+    DEBIAN("Debian 13", "library/debian", "trixie", 50, 200, 150),
+    ARCH("Arch Linux ARM", "archlinuxarm", "aarch64", 830, 2500, 2490),
+    ARCH_X86_64(
+        "Arch Linux (x86_64)",
+        "library/archlinux",
+        "sha256:375a401bb3c6376b37f40b6dfa25067db37ec78d0b7af67ae6315f43a0184a9d",
+        135, 411, 650,
+    ),
+}
+
+/** Both Arch variants use pacman and the Arch package overlays; Debian keeps apt/dpkg. */
+val Distro.isArch: Boolean get() = this == Distro.ARCH || this == Distro.ARCH_X86_64
+
+/** An Arch rootfs only runs on the ABI it was built for: no emulation, no silent swap. */
+fun Distro.supportedOn(abi: String): Boolean = when (this) {
+    Distro.DEBIAN -> true
+    Distro.ARCH -> abi == "arm64-v8a"
+    Distro.ARCH_X86_64 -> abi == "x86_64"
+}
+
+/** x86_64 Arch is PRoot-only; the untested root path is refused. */
+fun Distro.chrootSupported(): Boolean = when (this) {
+    Distro.DEBIAN, Distro.ARCH -> true
+    Distro.ARCH_X86_64 -> false
 }
 
 /** OCI platform for an Android ABI. */

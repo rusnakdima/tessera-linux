@@ -83,5 +83,6 @@ object ArchPackages {
     fun packagesFor(distro: Distro): PackageSets = when (distro) {
         Distro.DEBIAN -> debian
         Distro.ARCH -> arch
+        Distro.ARCH_X86_64 -> arch
     }
 }

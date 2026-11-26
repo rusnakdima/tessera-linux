@@ -20,7 +20,7 @@ object AutoInstalls {
      */
     fun missingGui(distro: Distro, installed: Set<String>): List<String> {
         val sets = ArchPackages.packagesFor(distro)
-        val windowManager = if (distro == Distro.ARCH) "openbox" else "matchbox-window-manager"
+        val windowManager = if (distro == Distro.ARCH || distro == Distro.ARCH_X86_64) "openbox" else "matchbox-window-manager"
         if (windowManager !in installed) return emptyList()
         val companions = (sets.themeCompanions + sets.desktopCompanions)
             .filterKeys { it in installed }.values.filterNot { it in installed }
@@ -32,5 +32,5 @@ object AutoInstalls {
 
     /** ADB and fastboot: Arch ships both in `android-tools`. */
     fun adb(distro: Distro): List<String> =
-        if (distro == Distro.ARCH) listOf("android-tools") else PhoneAdb.PACKAGES
+        if (distro == Distro.ARCH || distro == Distro.ARCH_X86_64) listOf("android-tools") else PhoneAdb.PACKAGES
 }

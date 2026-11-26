@@ -52,6 +52,7 @@ class StoreRegistry(
                 Distro.DEBIAN -> runCatching { s.read(DPKG_STATUS)?.let(::installedPackages) }.getOrNull()
                 // pacman's local database is the only source; a failure is an empty set, not dpkg.
                 Distro.ARCH -> runCatching { pacmanPackages(s) }.getOrElse { emptySet() }
+                Distro.ARCH_X86_64 -> runCatching { pacmanPackages(s) }.getOrElse { emptySet() }
             }
         }
     }
