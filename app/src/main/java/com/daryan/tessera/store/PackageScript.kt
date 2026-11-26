@@ -4,6 +4,7 @@
 package com.daryan.tessera.store
 
 import com.daryan.tessera.container.Distro
+import com.daryan.tessera.container.isArch
 import com.daryan.tessera.container.shellQuote
 
 /**
@@ -25,12 +26,8 @@ interface PackageScript {
     fun failure(lines: List<String>, code: Int): String
 
     companion object {
-        /** The scripts [distro]'s package manager needs. */
-        fun forDistro(distro: Distro): PackageScript = when (distro) {
-            Distro.DEBIAN -> AptScript
-            Distro.ARCH -> PacmanScript
-            Distro.ARCH_X86_64 -> PacmanScript
-        }
+        /** The scripts [distro]'s package manager needs: pacman for both Arch variants. */
+        fun forDistro(distro: Distro): PackageScript = if (distro.isArch) PacmanScript else AptScript
     }
 }
 

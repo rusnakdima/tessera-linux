@@ -3,8 +3,10 @@
 
 package com.daryan.tessera.store
 
+import com.daryan.tessera.container.ArchPackages
 import com.daryan.tessera.container.Distro
 import com.daryan.tessera.container.GUI_HELPER_PACKAGES
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -85,5 +87,11 @@ class ArchStoreWiringTest {
             StoreInstalls.provenance(archApp().copy(id = "org.example.App", source = StoreSource.FLATHUB)))
         assertEquals("Debian · main", StoreInstalls.provenance(archApp().copy(
             source = StoreSource.DEBIAN, component = "main")))
+    }
+
+    @Test
+    fun archX8664GetsPacmanScriptAndOverlays() = runBlocking {
+        assertEquals(PacmanScript, PackageScript.forDistro(Distro.ARCH_X86_64))
+        assertTrue(ArchPackages.packagesFor(Distro.ARCH_X86_64).guiHelpers.isNotEmpty())
     }
 }

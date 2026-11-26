@@ -3,6 +3,7 @@
 
 package com.daryan.tessera.store
 
+import com.daryan.tessera.container.Distro
 import com.daryan.tessera.container.GuestRelease
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -99,19 +100,22 @@ class StoreCatalog(private val dir: File, private val scope: CoroutineScope) {
         }
     }
 
-    /** Loads the Arch repositories and the AUR into the same catalog state the store observes. */
-    fun loadArch(refresh: Boolean = false) {
-        val key = "arch"
+    /**
+     * Loads [distro]'s official Arch repositories and the AUR into the same catalog state the
+     * store observes. The lowercase key keeps each Arch variant's cache and icons apart.
+     */
+    fun loadArch(distro: Distro, refresh: Boolean = false) {
+        val key = "arch-${distro.name.lowercase()}"
         if (_state.value is CatalogState.Loading && loading == key) return
         job?.cancel()
         loading = key
         job = scope.launch(Dispatchers.IO) {
             _state.value = try {
-                val cache = File(dir, "catalog-arch.json")
+                val cache = File(dir, "catalog-$key.json")
                 val cached = if (!refresh) readCache(cache) else null
                 cached ?: run {
                     _state.value = CatalogState.Loading("Reading the Arch and AUR catalogs", null)
-                    val apps = ArchCatalog.load(dir).distinctBy { it.id }.sortedBy { it.name.lowercase() }
+                    val apps = ArchCatalog.load(dir, distro).distinctBy { it.id }.sortedBy { it.name.lowercase() }
                     cache.parentFile?.mkdirs()
                     cache.writeText(json.encodeToString(Cache.serializer(), Cache(apps)))
                     CatalogState.Ready(apps, System.currentTimeMillis())

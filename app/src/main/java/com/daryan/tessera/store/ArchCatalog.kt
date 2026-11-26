@@ -3,6 +3,7 @@
 
 package com.daryan.tessera.store
 
+import com.daryan.tessera.container.Distro
 import com.daryan.tessera.container.HttpFetch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -167,17 +168,43 @@ object AurCatalog {
     }
 }
 
-/** The Arch store: the four ALARM repositories plus the AUR. One source failing drops only it. */
+/** The Arch store: the distro's official repositories plus the AUR. One source failing drops only it. */
 object ArchCatalog {
-    private const val MIRROR = "https://ca.us.mirror.archlinuxarm.org/aarch64"
-    private val REPOS = listOf("core", "extra", "community", "alarm")
+    private const val ALARM_MIRROR = "https://ca.us.mirror.archlinuxarm.org/aarch64"
+    private val ALARM_REPOS = listOf("core", "extra", "community", "alarm")
+    private const val OFFICIAL_MIRROR = "https://geo.mirror.pkgbuild.com"
+    private val OFFICIAL_REPOS = listOf("core", "extra")
 
-    suspend fun load(dir: File): List<StoreApp> = withContext(Dispatchers.IO) {
+    /**
+     * The repository databases [distro]'s store reads, grouped by repository name. ARM keeps
+     * ALARM's four flat `core extra community alarm` databases byte-for-byte. x86_64 uses the
+     * official Arch `core` and `extra`: the mirror serves their databases under `os/x86_64`,
+     * with the flat `<repo>/<repo>.db.tar.gz` names kept as a fallback for mirrors that publish
+     * the same flat layout ALARM uses.
+     */
+    private fun repos(distro: Distro): List<Pair<String, List<String>>> = when (distro) {
+        Distro.DEBIAN -> emptyList()
+        Distro.ARCH -> ALARM_REPOS.map { repo -> repo to listOf("$ALARM_MIRROR/$repo/$repo.db.tar.gz") }
+        Distro.ARCH_X86_64 -> OFFICIAL_REPOS.map { repo ->
+            repo to listOf(
+                "$OFFICIAL_MIRROR/$repo/os/x86_64/$repo.db.tar.gz",
+                "$OFFICIAL_MIRROR/$repo/$repo.db.tar.gz",
+            )
+        }
+    }
+
+    /** The database URLs [distro]'s store reads, one per line, in the order [load] tries them. */
+    fun repoScript(distro: Distro): String = repos(distro).joinToString("\n") { (_, urls) ->
+        urls.joinToString("\n")
+    }
+
+    suspend fun load(dir: File, distro: Distro): List<StoreApp> = withContext(Dispatchers.IO) {
         val apps = mutableListOf<StoreApp>()
-        for (repo in REPOS) {
+        for ((repo, urls) in repos(distro)) {
             currentCoroutineContext().ensureActive()
             runCatching {
-                val db = HttpFetch.bytes("$MIRROR/$repo/$repo.db.tar.gz")
+                val db = urls.firstNotNullOfOrNull { url -> runCatching { HttpFetch.bytes(url) }.getOrNull() }
+                    ?: throw IOException("no ${repo}.db.tar.gz for ${distro.label} at ${urls.first()}")
                 apps += ArchRepoDb.parse(ByteArrayInputStream(db), repo)
             }
         }

@@ -5,6 +5,7 @@ package com.daryan.tessera.store
 
 import com.daryan.tessera.container.ArchPackages
 import com.daryan.tessera.container.Distro
+import com.daryan.tessera.container.isArch
 
 /** What the install queue needs to know about a store app, in the active distro's package names. */
 data class StoreJob(
@@ -19,13 +20,13 @@ object StoreInstalls {
     /** The store tab that matches the active distro: Flathub is available in either. */
     fun storeSourceFor(source: StoreSource, distro: Distro): StoreSource = when {
         source == StoreSource.FLATHUB -> StoreSource.FLATHUB
-        distro == Distro.ARCH || distro == Distro.ARCH_X86_64 -> if (source == StoreSource.DEBIAN) StoreSource.ARCH else source
+        distro.isArch -> if (source == StoreSource.DEBIAN) StoreSource.ARCH else source
         else -> if (source == StoreSource.ARCH || source == StoreSource.AUR) StoreSource.DEBIAN else source
     }
 
     fun storeJobFor(app: StoreApp, distro: Distro): StoreJob {
         val helpers = ArchPackages.packagesFor(distro).guiHelpers
-        val aur = (distro == Distro.ARCH || distro == Distro.ARCH_X86_64) && app.source == StoreSource.AUR
+        val aur = distro.isArch && app.source == StoreSource.AUR
         return StoreJob(
             packages = if (aur) listOf(packageBaseFor(app)) else listOf(app.pkg),
             helpers = helpers,

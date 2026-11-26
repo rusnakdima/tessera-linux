@@ -7,6 +7,7 @@ import com.daryan.tessera.container.ConfigStore
 import com.daryan.tessera.container.Distro
 import com.daryan.tessera.container.DistroExec
 import com.daryan.tessera.container.FsGrant
+import com.daryan.tessera.container.isArch
 import com.daryan.tessera.container.PermissionManifest
 import com.daryan.tessera.container.Permissions
 import kotlinx.coroutines.Dispatchers
@@ -48,11 +49,11 @@ class StoreRegistry(
             }
         }
         _installed.value = store?.let { s ->
-            when (distro) {
-                Distro.DEBIAN -> runCatching { s.read(DPKG_STATUS)?.let(::installedPackages) }.getOrNull()
+            if (distro.isArch) {
                 // pacman's local database is the only source; a failure is an empty set, not dpkg.
-                Distro.ARCH -> runCatching { pacmanPackages(s) }.getOrElse { emptySet() }
-                Distro.ARCH_X86_64 -> runCatching { pacmanPackages(s) }.getOrElse { emptySet() }
+                runCatching { pacmanPackages(s) }.getOrElse { emptySet() }
+            } else {
+                runCatching { s.read(DPKG_STATUS)?.let(::installedPackages) }.getOrNull()
             }
         }
     }

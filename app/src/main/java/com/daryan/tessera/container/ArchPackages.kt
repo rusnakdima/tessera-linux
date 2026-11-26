@@ -79,10 +79,6 @@ object ArchPackages {
         compositor = compositor,
     )
 
-    /** The package sets of [distro]; Debian's are the constants above, unchanged. */
-    fun packagesFor(distro: Distro): PackageSets = when (distro) {
-        Distro.DEBIAN -> debian
-        Distro.ARCH -> arch
-        Distro.ARCH_X86_64 -> arch
-    }
+    /** The package sets of [distro]; both Arch variants share [arch], Debian keeps its constants. */
+    fun packagesFor(distro: Distro): PackageSets = if (distro.isArch) arch else debian
 }

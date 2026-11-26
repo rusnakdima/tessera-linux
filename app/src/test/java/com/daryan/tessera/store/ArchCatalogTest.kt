@@ -3,9 +3,12 @@
 
 package com.daryan.tessera.store
 
+import com.daryan.tessera.container.Distro
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.util.zip.GZIPOutputStream
@@ -29,6 +32,15 @@ class ArchCatalogTest {
 
     @Test fun shortAurQueryIsRejectedWithoutRequest() {
         assertThrows(IllegalArgumentException::class.java) { runBlocking { AurCatalog.search("a") } }
+    }
+
+    @Test
+    fun x8664UsesOfficialRepos() {
+        val script = ArchCatalog.repoScript(Distro.ARCH_X86_64)
+        assertTrue(script.contains("https://geo.mirror.pkgbuild.com"))
+        assertTrue(script.contains("/core/core.db.tar.gz"))
+        assertTrue(script.contains("/extra/extra.db.tar.gz"))
+        assertFalse(script.contains("archlinuxarm"))
     }
 
     private fun gzipUstar(data: ByteArray, name: String): java.io.InputStream {
