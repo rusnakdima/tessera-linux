@@ -15,6 +15,22 @@ class ArchSetupTest {
         assertFalse("apt-get" in script)
     }
 
+    @Test
+    fun x8664FirstBootSyncsMissingPacmanDb() {
+        val script = ArchSetup.firstBootScript(Distro.ARCH_X86_64)
+        assertTrue(script.contains("pacman-key --populate archlinux\n"))
+        assertFalse(script.contains("archlinuxarm"))
+        assertTrue(script.contains("[ -f /var/lib/pacman/sync/core.db ] ||"))
+        assertTrue(script.contains("pacman -Syu --noconfirm"))
+    }
+
+    @Test
+    fun armFirstBootIsUnchanged() {
+        val script = ArchSetup.firstBootScript(Distro.ARCH)
+        assertTrue(script.contains("pacman-key --populate archlinuxarm"))
+        assertTrue(script.contains("ca.us.mirror.archlinuxarm.org"))
+    }
+
     @Test fun chrootScriptIncludesArchFirstBootWhenDistroIsArch() {
         val script = ChrootSetup.script("/root/arch", "/tmp/a.tar.gz", "arch-aarch64", Distro.ARCH)
         assertTrue("pacman-key --populate archlinuxarm" in script)

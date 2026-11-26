@@ -163,7 +163,7 @@ class RootfsInstaller(
 
         _state.value = InstallState.Configuring
         // Arch configures itself on first boot; Debian gets the apt tweaks. Both get the shared part.
-        if (distro == Distro.ARCH) ArchSetup.configure(paths, root, uid, gid) else RootfsSetup.configure(root, uid, gid, distro)
+        if (distro.isArch) ArchSetup.configure(paths, root, uid, gid, distro) else RootfsSetup.configure(root, uid, gid, distro)
         FakeProc.write(paths.fakeProcDir)
         File(root, ContainerPaths.INSTALLED_MARKER).writeText("${distro.name} ${artifacts.first().key}\n")
         tarballs.forEach { it.delete() }
@@ -276,8 +276,31 @@ object ChrootSetup {
         // Whiteouts (.wh.*) are out of scope; the pinned image's layers only overwrite files, so
         // unpacking them in order into the same tree gives the final filesystem.
         val extract = tarballs.joinToString("\n") { "/system/bin/tar -xzf '$it' -C \"\$T\"" }
-        val firstBoot = if (distro == Distro.ARCH) {
-            """
+        val firstBoot = when {
+            distro == Distro.ARCH_X86_64 -> """
+                # Arch's keyring needs priming before pacman can install anything; the official
+                # x86_64 image ships a working mirrorlist, so leave it exactly as it shipped.
+                # pacman-key is the guest's, so it must run as the guest: give gpg the device
+                # nodes a tarball may lack, then step in with the first chroot tool the phone has.
+                mkdir -p "${'$'}T/dev"
+                for d in null zero random urandom; do
+                  [ ! -e "/dev/${'$'}d" ] || [ -e "${'$'}T/dev/${'$'}d" ] || cp -a "/dev/${'$'}d" "${'$'}T/dev/${'$'}d" || true
+                done
+                ENTER=
+                if command -v chroot >/dev/null 2>&1; then
+                  ENTER=chroot
+                else
+                  for bb in /data/adb/magisk/busybox /data/adb/ksu/bin/busybox /data/adb/ap/bin/busybox; do
+                    if [ -x "${'$'}bb" ]; then ENTER="${'$'}bb chroot"; break; fi
+                  done
+                fi
+                [ -n "${'$'}ENTER" ] || { echo "No chroot found to initialise the Arch keyring" >&2; exit 1; }
+                GUEST_ENV="/usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/root"
+                ${'$'}ENTER "${'$'}T" ${'$'}GUEST_ENV /usr/bin/pacman-key --init
+                ${'$'}ENTER "${'$'}T" ${'$'}GUEST_ENV /usr/bin/pacman-key --populate archlinux
+                ${'$'}ENTER "${'$'}T" ${'$'}GUEST_ENV /bin/sh -c '[ -f /var/lib/pacman/sync/core.db ] || /usr/bin/pacman -Syu --noconfirm'
+            """.trimIndent()
+            distro == Distro.ARCH -> """
                 # Arch needs its keyring primed from the ALARM mirror before pacman can install anything.
                 [ -e "${'$'}T/etc/pacman.d/mirrorlist" ] || echo 'Server = https://ca.us.mirror.archlinuxarm.org/${'$'}arch/${'$'}repo' > "${'$'}T/etc/pacman.d/mirrorlist"
                 # pacman-key is the guest's, so it must run as the guest: give gpg the device
@@ -299,8 +322,7 @@ object ChrootSetup {
                 ${'$'}ENTER "${'$'}T" ${'$'}GUEST_ENV /usr/bin/pacman-key --init
                 ${'$'}ENTER "${'$'}T" ${'$'}GUEST_ENV /usr/bin/pacman-key --populate archlinuxarm
             """.trimIndent()
-        } else {
-            """
+            else -> """
                 # apt downloads as _apt, which isn't in Android's network groups.
                 [ -d "${'$'}T/etc/apt/apt.conf.d" ] && echo 'APT::Sandbox::User "root";' > "${'$'}T/etc/apt/apt.conf.d/99launcher"
                 for f in "${'$'}T"/etc/apt/sources.list.d/*.sources; do
