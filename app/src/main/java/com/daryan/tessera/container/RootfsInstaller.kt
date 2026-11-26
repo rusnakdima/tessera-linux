@@ -149,13 +149,18 @@ class RootfsInstaller(
         root.mkdirs()
         val tar = hostTar()
         try {
-            for (tarball in tarballs) {
-                // Whiteout entries (.wh.*) are out of scope: the pinned Arch image's layers only
-                // overwrite earlier files, so extracting them in manifest order is enough.
-                // Unzipped here, not with tar's -z: toybox runs /system/bin/zcat for that, which
-                // PRoot is refused like tar itself.
-                val (code, output) = runProot(paths.proot.path, paths.prootEnv(), tarball, "--link2symlink", "-0", *tar.argv.toTypedArray(), "-xf", "-", "-C", root.path)
-                if (code != 0) throw prootFailure(code, output, "extract")
+            for (step in extractionPlan(layersOf(tarballs))) {
+                when (step) {
+                    is ExtractStep.ClearSymlinks -> clearSymlinks(root, step.paths)
+                    is ExtractStep.Unpack -> {
+                        // Whiteout entries (.wh.*) are out of scope: the pinned Arch image's layers only
+                        // overwrite earlier files, so extracting them in manifest order is enough.
+                        // Unzipped here, not with tar's -z: toybox runs /system/bin/zcat for that, which
+                        // PRoot is refused like tar itself.
+                        val (code, output) = runProot(paths.proot.path, paths.prootEnv(), File(step.tarball), "--link2symlink", "-0", *tar.argv.toTypedArray(), "-xf", "-", "-C", root.path)
+                        if (code != 0) throw prootFailure(code, output, "extract")
+                    }
+                }
             }
         } finally {
             tar.file.delete()
@@ -274,8 +279,15 @@ object ChrootSetup {
     fun script(root: String, tarballs: List<String>, marker: String, distro: Distro = Distro.DEBIAN): String {
         require(tarballs.isNotEmpty()) { "at least one tarball is needed" }
         // Whiteouts (.wh.*) are out of scope; the pinned image's layers only overwrite files, so
-        // unpacking them in order into the same tree gives the final filesystem.
-        val extract = tarballs.joinToString("\n") { "/system/bin/tar -xzf '$it' -C \"\$T\"" }
+        // unpacking them in order into the same tree gives the final filesystem. A layer that
+        // replaces an earlier symlink needs those links dropped first: toybox tar resolves them
+        // before unlinking and otherwise reports "not under" the staging root.
+        val extract = extractionPlan(layersOf(tarballs.map(::File))).joinToString("\n") { step ->
+            when (step) {
+                is ExtractStep.Unpack -> "/system/bin/tar -xzf '${step.tarball}' -C \"\$T\""
+                is ExtractStep.ClearSymlinks -> clearSymlinkShell(step.paths)
+            }
+        }
         val firstBoot = when {
             distro == Distro.ARCH_X86_64 -> """
                 # Arch's keyring needs priming before pacman can install anything; the official
