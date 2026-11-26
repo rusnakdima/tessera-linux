@@ -84,6 +84,27 @@ import java.io.File
 
 private val CATEGORIES = listOf("All") + StoreRegistry.CATEGORY_LABELS.values.distinct()
 
+/** Which apps a Store tab shows: its own catalog first, then the query and category. */
+internal fun storeAppsFor(
+    apps: List<StoreApp>,
+    source: StoreSource,
+    query: String,
+    category: String,
+): List<StoreApp> {
+    val q = query.trim().lowercase()
+    return apps.filter { app ->
+        when (source) {
+            StoreSource.ARCH, StoreSource.AUR -> app.source == source
+            else -> true // Debian and Flathub tabs still show their own catalog only.
+        } &&
+            (category == "All" || StoreRegistry.launcherCategory(app.categories) == category) &&
+            (q.isEmpty() || q in app.name.lowercase() || q in app.summary.lowercase() || q in app.pkg.lowercase())
+    }.let { list ->
+        // Name matches first when searching.
+        if (q.isEmpty()) list else list.sortedByDescending { it.name.lowercase().startsWith(q) }
+    }
+}
+
 @Composable
 fun StoreScreen(
     /** Which store is shown, and switching it. */
@@ -132,15 +153,8 @@ fun StoreScreen(
 
     when (catalog) {
         is CatalogState.Ready -> {
-            val shown = remember(catalog.apps, query, category) {
-                val q = query.trim().lowercase()
-                catalog.apps.filter { app ->
-                    (category == "All" || StoreRegistry.launcherCategory(app.categories) == category) &&
-                        (q.isEmpty() || q in app.name.lowercase() || q in app.summary.lowercase() || q in app.pkg.lowercase())
-                }.let { list ->
-                    // Name matches first when searching.
-                    if (q.isEmpty()) list else list.sortedByDescending { it.name.lowercase().startsWith(q) }
-                }
+            val shown = remember(catalog.apps, source, query, category) {
+                storeAppsFor(catalog.apps, source, query, category)
             }
             LazyColumn(contentPadding = contentPadding, modifier = Modifier.fillMaxSize()) {
                 item(key = "search") {
@@ -156,6 +170,22 @@ fun StoreScreen(
                         }
                     }
                     CommandLineHint()
+                    if (catalog.aurError != null) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        ) {
+                            Text(
+                                "The AUR catalog couldn't load: ${catalog.aurError}. Official Arch apps are still available.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.weight(1f),
+                            )
+                            FilledTonalButton(onClick = onRetry) { Text("Try again") }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
                     Text(
                         "${shown.size} apps from ${source.label}",
                         style = MaterialTheme.typography.labelLarge,
@@ -435,14 +465,7 @@ fun StoreAppSheet(
                 }
                 if (blocker == null) {
                     Text(
-                        if (app.source == StoreSource.FLATHUB) {
-                            "Installs ${app.name} from Flathub with flatpak, with the runtime it needs, then adds it to your apps." +
-                                if (firstFlathub) " As the first Flathub app here, it also downloads the runtimes Flathub apps share, " +
-                                    "often several hundred MB, so it takes longer. Apps after it that use the same runtimes install faster." else ""
-                        } else {
-                            "Installs ${app.pkg} from Debian ${app.component} with apt, in a terminal you can watch, " +
-                                "then adds it to your apps."
-                        },
+                        StoreInstalls.installCopy(app, firstFlathub),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 8.dp),

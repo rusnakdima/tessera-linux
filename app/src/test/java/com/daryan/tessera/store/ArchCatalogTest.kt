@@ -10,7 +10,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
 
 class ArchCatalogTest {
@@ -34,6 +36,24 @@ class ArchCatalogTest {
         assertThrows(IllegalArgumentException::class.java) { runBlocking { AurCatalog.search("a") } }
     }
 
+    @Test fun aurArchiveIsDecodedFromGzipStream() {
+        val json = """[{"Name":"yay-bin","Version":"13.1.0-1","Description":"AUR helper","URLPath":"/cgit/aur.git/snapshot/yay-bin.tar.gz","NumVotes":7},{"Name":"foo","Version":"1","Description":"Foo","URLPath":null,"NumVotes":0}]"""
+        val apps = AurCatalog.parseArchive(GZIPInputStream(ByteArrayInputStream(gzip(json))))
+        assertEquals(2, apps.size)
+        assertEquals("yay-bin", apps[0].pkg)
+        assertEquals("/cgit/aur.git/snapshot/yay-bin.tar.gz", apps[0].aurPath)
+        assertEquals(StoreSource.AUR, apps[0].source)
+        assertEquals("foo", apps[1].pkg)
+    }
+
+    @Test fun truncatedAurArchiveThrows() {
+        val full = """[{"Name":"one","Description":"first"},{"Name":"two","Description":"second"}]"""
+        val truncated = full.substring(0, full.length - 15)
+        assertThrows(Exception::class.java) {
+            AurCatalog.parseArchive(GZIPInputStream(ByteArrayInputStream(gzip(truncated))))
+        }
+    }
+
     @Test
     fun x8664UsesOfficialRepos() {
         val script = ArchCatalog.repoScript(Distro.ARCH_X86_64)
@@ -42,6 +62,10 @@ class ArchCatalogTest {
         assertTrue(script.contains("/extra/extra.db.tar.gz"))
         assertFalse(script.contains("archlinuxarm"))
     }
+
+    private fun gzip(text: String): ByteArray = ByteArrayOutputStream().apply {
+        GZIPOutputStream(this).use { it.write(text.toByteArray(Charsets.UTF_8)) }
+    }.toByteArray()
 
     private fun gzipUstar(data: ByteArray, name: String): java.io.InputStream {
         val h = ByteArray(512)

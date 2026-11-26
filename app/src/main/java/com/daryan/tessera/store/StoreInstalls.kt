@@ -42,6 +42,21 @@ object StoreInstalls {
     fun packageBaseFor(app: StoreApp): String =
         app.aurPath?.substringAfterLast('/')?.removeSuffix(".tar.gz")?.takeIf { it.isNotBlank() } ?: app.pkg
 
+    /** What installing an app actually does, in the active source's own words. */
+    fun installCopy(app: StoreApp, firstFlathub: Boolean): String = when (app.source) {
+        StoreSource.FLATHUB ->
+            "Installs ${app.name} from Flathub with flatpak, with the runtime it needs, then adds it to your apps." +
+                if (firstFlathub) " As the first Flathub app here, it also downloads the runtimes Flathub apps share, " +
+                    "often several hundred MB, so it takes longer. Apps after it that use the same runtimes install faster." else ""
+        StoreSource.ARCH ->
+            "Installs ${app.pkg} from Arch Linux ${app.component} with pacman, in a terminal you can watch, then adds it to your apps."
+        StoreSource.AUR ->
+            "Installs ${app.pkg} from AUR, built on the device with makepkg and installed with pacman, " +
+                "in a terminal you can watch, then adds it to your apps."
+        StoreSource.DEBIAN ->
+            "Installs ${app.pkg} from Debian ${app.component} with apt, in a terminal you can watch, then adds it to your apps."
+    }
+
     /** Where an app came from, as shown on its Store page. */
     fun provenance(app: StoreApp): String = when (app.source) {
         StoreSource.FLATHUB -> "Flathub · ${app.id}"

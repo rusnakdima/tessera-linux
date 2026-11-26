@@ -89,6 +89,28 @@ class ArchStoreWiringTest {
             source = StoreSource.DEBIAN, component = "main")))
     }
 
+    @Test fun installCopyNamesSourceAndTool() {
+        val arch = StoreInstalls.installCopy(archApp(), false)
+        assertTrue(arch, "pacman" in arch && "Arch Linux extra" in arch)
+        assertFalse("Debian" in arch)
+        assertFalse("apt" in arch)
+
+        val aur = StoreInstalls.installCopy(aurApp(pkg = "yay-bin"), false)
+        assertTrue(aur, "AUR" in aur && "makepkg" in aur && "pacman" in aur)
+
+        val debian = StoreInstalls.installCopy(
+            archApp().copy(id = "firefox-esr.desktop", source = StoreSource.DEBIAN, component = "main"), false,
+        )
+        assertTrue(debian, "Debian main" in debian && "apt" in debian)
+
+        val flathub = archApp().copy(id = "org.example.App", source = StoreSource.FLATHUB)
+        assertEquals(
+            "Installs Firefox from Flathub with flatpak, with the runtime it needs, then adds it to your apps.",
+            StoreInstalls.installCopy(flathub, false),
+        )
+        assertTrue(StoreInstalls.installCopy(flathub, true).contains("As the first Flathub app here"))
+    }
+
     @Test
     fun archX8664GetsPacmanScriptAndOverlays() = runBlocking {
         assertEquals(PacmanScript, PackageScript.forDistro(Distro.ARCH_X86_64))

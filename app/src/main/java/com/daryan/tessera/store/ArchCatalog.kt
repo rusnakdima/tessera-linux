@@ -9,10 +9,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeToSequence
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
@@ -129,26 +133,46 @@ object AurCatalog {
             lines.getOrNull(0)?.takeIf { it.isNotBlank() }?.let { conn.setRequestProperty("If-None-Match", it) }
             lines.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { conn.setRequestProperty("If-Modified-Since", it) }
         }
+        val tmp = File(dir, "aur-meta.json.tmp")
         try {
             when (conn.responseCode) {
-                304 -> parseArchive(cache.readText())
+                304 -> {
+                    if (!cache.isFile) throw IOException("AUR cache missing after HTTP 304: ${cache.path}")
+                    FileInputStream(cache).use { parseArchive(it) }
+                }
                 200 -> {
-                    val text = GZIPInputStream(conn.inputStream.buffered(64 * 1024)).bufferedReader().use { it.readText() }
-                    val apps = parseArchive(text)
+                    // Stream the decompressed JSON into a temporary file: reading 55 MB into a
+                    // String doubles it as UTF-16 and was too much for the device's heap.
                     cache.parentFile?.mkdirs()
-                    cache.writeText(text)
+                    GZIPInputStream(conn.inputStream.buffered(64 * 1024)).use { gz ->
+                        FileOutputStream(tmp).use { out ->
+                            val buffer = ByteArray(64 * 1024)
+                            while (true) {
+                                currentCoroutineContext().ensureActive()
+                                val n = gz.read(buffer)
+                                if (n < 0) break
+                                out.write(buffer, 0, n)
+                            }
+                        }
+                    }
+                    // Only a complete parse may replace the cache and its revalidation headers.
+                    val apps = FileInputStream(tmp).use { parseArchive(it) }
+                    if (!tmp.renameTo(cache)) throw IOException("could not replace ${cache.name}")
                     headers.writeText(listOf(conn.getHeaderField("ETag").orEmpty(), conn.getHeaderField("Last-Modified").orEmpty()).joinToString("\n"))
                     apps
                 }
                 else -> throw IOException("GET $ARCHIVE: HTTP ${conn.responseCode}")
             }
         } finally {
+            tmp.delete()
             conn.disconnect()
         }
     }
 
-    private fun parseArchive(json: String): List<StoreApp> =
-        this.json.decodeFromString<List<Package>>(json).mapNotNull { it.toApp() }
+    /** Decodes one AUR package at a time so the 55 MB archive is never held as a single String. */
+    @OptIn(ExperimentalSerializationApi::class)
+    internal fun parseArchive(input: InputStream): List<StoreApp> =
+        json.decodeToSequence<Package>(input).mapNotNull { it.toApp() }.toList()
 
     private fun Package.toApp(): StoreApp? {
         val name = Name?.takeIf { it.isNotBlank() } ?: return null
@@ -209,7 +233,6 @@ object ArchCatalog {
             }
         }
         currentCoroutineContext().ensureActive()
-        runCatching { apps += AurCatalog.loadArchive(dir) }
         apps
     }
 }

@@ -5,6 +5,7 @@ package com.daryan.tessera.store
 
 import com.daryan.tessera.container.Distro
 import com.daryan.tessera.container.GuestRelease
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -26,7 +27,7 @@ import java.util.zip.GZIPInputStream
 sealed interface CatalogState {
     data object Empty : CatalogState
     data class Loading(val step: String, val progress: Float?) : CatalogState
-    data class Ready(val apps: List<StoreApp>, val updated: Long) : CatalogState
+    data class Ready(val apps: List<StoreApp>, val updated: Long, val aurError: String? = null) : CatalogState
     data class Failed(val message: String) : CatalogState
 }
 
@@ -72,7 +73,13 @@ data class CatalogSource(val key: String, val mirror: String, val suite: String,
  * components, with icons. Downloaded once (about 20 MB), parsed into a compact cache, and
  * refreshed after a week.
  */
-class StoreCatalog(private val dir: File, private val scope: CoroutineScope) {
+class StoreCatalog(
+    private val dir: File,
+    private val scope: CoroutineScope,
+    /** Seams for JVM tests: the real readers, kept out of the network-free unit tests. */
+    private val officialLoader: suspend (File, Distro) -> List<StoreApp> = { d, distro -> ArchCatalog.load(d, distro) },
+    private val aurLoader: suspend (File) -> List<StoreApp> = { d -> AurCatalog.loadArchive(d) },
+) {
     private val _state = MutableStateFlow<CatalogState>(CatalogState.Empty)
     val state: StateFlow<CatalogState> = _state
     private var job: Job? = null
@@ -93,8 +100,9 @@ class StoreCatalog(private val dir: File, private val scope: CoroutineScope) {
                 val cache = File(dir, "catalog-$key.json")
                 val cached = if (!refresh) readCache(cache) else null
                 cached ?: download(source, arch, cache)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
                 CatalogState.Failed(e.message ?: e.javaClass.simpleName)
             }
         }
@@ -103,6 +111,10 @@ class StoreCatalog(private val dir: File, private val scope: CoroutineScope) {
     /**
      * Loads [distro]'s official Arch repositories and the AUR into the same catalog state the
      * store observes. The lowercase key keeps each Arch variant's cache and icons apart.
+     *
+     * The official repositories are cached; the AUR is revalidated on every load and reported
+     * separately in [CatalogState.Ready.aurError], so a failed or cancelled AUR read can never
+     * poison the official cache with a partial "complete" catalog.
      */
     fun loadArch(distro: Distro, refresh: Boolean = false) {
         val key = "arch-${distro.name.lowercase()}"
@@ -112,15 +124,35 @@ class StoreCatalog(private val dir: File, private val scope: CoroutineScope) {
         job = scope.launch(Dispatchers.IO) {
             _state.value = try {
                 val cache = File(dir, "catalog-$key.json")
-                val cached = if (!refresh) readCache(cache) else null
-                cached ?: run {
-                    _state.value = CatalogState.Loading("Reading the Arch and AUR catalogs", null)
-                    val apps = ArchCatalog.load(dir, distro).distinctBy { it.id }.sortedBy { it.name.lowercase() }
+                val cached = if (!refresh) readCache(cache)?.apps?.filter { it.source == StoreSource.ARCH } else null
+                val official = cached ?: run {
+                    _state.value = CatalogState.Loading("Reading the Arch repositories", null)
+                    val apps = officialLoader(dir, distro)
+                        .filter { it.source == StoreSource.ARCH }
+                        .distinctBy { it.id }
+                        .sortedBy { it.name.lowercase() }
                     cache.parentFile?.mkdirs()
                     cache.writeText(json.encodeToString(Cache.serializer(), Cache(apps)))
-                    CatalogState.Ready(apps, System.currentTimeMillis())
+                    apps
                 }
-            } catch (e: kotlinx.coroutines.CancellationException) {
+                _state.value = CatalogState.Loading("Reading the AUR catalog", null)
+                var aur: List<StoreApp>
+                var aurError: String?
+                try {
+                    aur = aurLoader(dir)
+                    aurError = null
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    aur = emptyList()
+                    aurError = t.message ?: t.javaClass.simpleName
+                    // Logcat tag lets a device smoke test name the real exception; android.util.Log
+                    // is a throwing stub in local JVM tests, so logging is best-effort.
+                    runCatching { android.util.Log.e("AUR catalog", "Could not load the AUR catalog", t) }
+                }
+                val all = (official + aur).distinctBy { it.id }.sortedBy { it.name.lowercase() }
+                CatalogState.Ready(all, System.currentTimeMillis(), aurError)
+            } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 CatalogState.Failed(e.message ?: e.javaClass.simpleName)
