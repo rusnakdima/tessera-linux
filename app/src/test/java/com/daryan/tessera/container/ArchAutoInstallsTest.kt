@@ -138,4 +138,47 @@ class ArchAutoInstallsTest {
             }
         }
     }
+
+    @Test fun zenPrebuiltScriptPinsOfficialX8664ReleaseAndInstallsLauncher() {
+        val s = AutoInstalls.zenBrowserInstallScript(Distro.ARCH_X86_64)!!
+        // The official tagged Linux tarball, and the SHA-256 of the actual downloaded asset.
+        assertTrue("releases/download/1.24.3b/zen.linux-x86_64.tar.xz" in s)
+        assertTrue("dde4b4e44002128c2ff3efc56074e671c24effe56fd192ab2eee3972541e1a2d" in s)
+        assertTrue("sha256sum -c" in s)
+        assertTrue("tar -xJf" in s)
+        assertTrue("--strip-components=1" in s)
+        assertTrue("/opt/zen-browser" in s)
+        assertTrue("install -m 755" in s)
+        assertTrue("/usr/bin/zen-browser" in s)
+        assertTrue("zen-browser.desktop" in s)
+        assertTrue("/usr/share/applications" in s)
+        assertTrue("zen-browser --version" in s)
+        // PRoot has no SYSV IPC for fakeroot and no user-space init: nothing here builds or elevates.
+        assertFalse("makepkg" in s)
+        assertFalse("fakeroot" in s)
+        assertFalse("sudo" in s)
+        assertFalse("systemd" in s)
+    }
+
+    @Test fun zenPrebuiltScriptPinsOfficialAarch64Release() {
+        val s = AutoInstalls.zenBrowserInstallScript(Distro.ARCH)!!
+        assertTrue("releases/download/1.24.3b/zen.linux-aarch64.tar.xz" in s)
+        assertTrue("77c04bdb0575ab918c1d6f41d04a55996d2263824a0392dc1b3f38deb873a57a" in s)
+        assertFalse("x86_64" in s)
+    }
+
+    @Test fun debianNeverDownloadsZenPrebuilt() {
+        assertNull(AutoInstalls.zenBrowserInstallScript(Distro.DEBIAN))
+    }
+
+    @Test fun zenPrebuiltScriptIsValidShell() {
+        assumeTrue(java.io.File("/bin/sh").canExecute())
+        for (distro in listOf(Distro.ARCH, Distro.ARCH_X86_64)) {
+            val script = AutoInstalls.zenBrowserInstallScript(distro)!!
+            // -n parses without running: nothing is downloaded or installed here.
+            val p = ProcessBuilder("/bin/sh", "-n", "-c", script).redirectErrorStream(true).start()
+            val out = p.inputStream.bufferedReader().readText()
+            assertEquals(out, 0, p.waitFor())
+        }
+    }
 }

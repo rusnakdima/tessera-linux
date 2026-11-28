@@ -106,4 +106,67 @@ object AutoInstalls {
             /usr/bin/$helper --version
         """.trimIndent()
     }
+
+    /**
+     * Zen Browser's official tagged Linux tarballs (release 1.24.3b, the upstream binary behind
+     * AUR `zen-browser 1.24.3b-1`). Both archives hold one top-level `zen/` directory with no
+     * symlinks or special files, so extracting them is safe in the PRoot guest. The digests were
+     * computed from the assets fetched from these exact URLs.
+     */
+    private data class ZenTarball(val url: String, val sha256: String)
+
+    private val zenTarballs = mapOf(
+        Distro.ARCH to ZenTarball(
+            "https://github.com/zen-browser/desktop/releases/download/1.24.3b/zen.linux-aarch64.tar.xz",
+            "77c04bdb0575ab918c1d6f41d04a55996d2263824a0392dc1b3f38deb873a57a",
+        ),
+        Distro.ARCH_X86_64 to ZenTarball(
+            "https://github.com/zen-browser/desktop/releases/download/1.24.3b/zen.linux-x86_64.tar.xz",
+            "dde4b4e44002128c2ff3efc56074e671c24effe56fd192ab2eee3972541e1a2d",
+        ),
+    )
+
+    /**
+     * Root shell script installing Zen Browser from its official prebuilt release on [distro],
+     * or null on Debian. No source build, no fakeroot and no package-manager hooks: the archive
+     * is verified, extracted to /opt/zen-browser and given a launcher and a .desktop entry so
+     * the launcher's system-app scan finds it. The browser's runtime libraries are already in
+     * the base and GUI-helper sets; `--needed` makes this a no-op when they are present.
+     */
+    fun zenBrowserInstallScript(distro: Distro): String? {
+        val t = zenTarballs[distro] ?: return null
+        return """
+            set -e
+            # PRoot passes Android's PATH through; the guest's commands are under /usr/bin.
+            export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+            pacman -S --noconfirm --needed tar xz curl ffmpeg libpulse libxt mime-types gtk3 nss
+            tmp=${'$'}(mktemp -d)
+            trap 'rm -rf "${'$'}tmp"' EXIT
+            if command -v curl >/dev/null 2>&1; then
+                curl -fsSL --retry 3 -o "${'$'}tmp/asset" ${t.url}
+            else
+                wget -q -O "${'$'}tmp/asset" ${t.url}
+            fi
+            echo "${t.sha256}  ${'$'}tmp/asset" | sha256sum -c - || { echo 'Checksum mismatch for zen-browser'; exit 1; }
+            # The only top-level member is zen/, so strip it; no symlinks to chmod in PRoot.
+            mkdir -p /opt/zen-browser
+            tar -xJf "${'$'}tmp/asset" -C /opt/zen-browser --strip-components=1
+            printf '#!/bin/sh\nexec /opt/zen-browser/zen "${'$'}@"\n' > "${'$'}tmp/zen-browser"
+            install -m 755 "${'$'}tmp/zen-browser" /usr/bin/zen-browser
+            cat > "${'$'}tmp/zen-browser.desktop" <<'EOF'
+            [Desktop Entry]
+            Name=Zen Browser
+            Comment=Firefox-based web browser
+            Exec=zen-browser %u
+            Icon=zen-browser
+            Type=Application
+            Categories=Network;WebBrowser;
+            Terminal=false
+            StartupWMClass=zen
+            EOF
+            install -Dm644 "${'$'}tmp/zen-browser.desktop" /usr/share/applications/zen-browser.desktop
+            install -Dm644 /opt/zen-browser/browser/chrome/icons/default/default128.png /usr/share/icons/hicolor/128x128/apps/zen-browser.png
+            /usr/bin/zen-browser --version
+        """.trimIndent()
+    }
 }

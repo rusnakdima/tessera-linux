@@ -1216,13 +1216,19 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         val job = StoreInstalls.storeJobFor(app, container.distro)
         // The helpers are a nicety: one the system lacks mustn't stop the app's own install.
         // An AUR job is one package base built as `user`; helpers must not join that build.
-        val packages = job.packages + if (job.aur) emptyList() else job.helpers
+        // A prebuilt release runs as one root script, so it needs no helper packages queued here.
+        val script = job.prebuiltScript
+        val packages = if (job.aur || script != null) job.packages else job.packages + job.helpers
+        // Register from the .desktop file the script installed: its categories give the browser
+        // network access and a Downloads folder, which a bare AUR entry wouldn't ask for.
+        val launcherApp = if (script != null) app.copy(desktopId = StoreInstalls.ZEN_BROWSER_DESKTOP) else app
         container.queue.enqueue(
             if (job.aur) "Building from AUR — output in Installs" else app.name,
             packages, QueueAction.INSTALL, container.catalog.iconFile(app)?.path, backend,
-            optional = if (job.aur) emptySet() else job.optional,
-            fallback = container.distro == Distro.DEBIAN && debianFallback(), aur = job.aur,
-        ) { store?.let { container.registry.register(app, it) } }
+            script = script,
+            optional = if (job.aur || script != null) emptySet() else job.optional,
+            fallback = script == null && container.distro == Distro.DEBIAN && debianFallback(), aur = job.aur,
+        ) { store?.let { container.registry.register(launcherApp, it) } }
         return true
     }
 

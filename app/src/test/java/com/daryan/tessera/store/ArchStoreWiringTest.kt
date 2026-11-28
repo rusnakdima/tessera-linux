@@ -9,6 +9,7 @@ import com.daryan.tessera.container.GUI_HELPER_PACKAGES
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -24,6 +25,9 @@ class ArchStoreWiringTest {
         summary = "web", description = "", categories = emptyList(), component = "extra",
         source = StoreSource.ARCH,
     )
+
+    private fun zenApp() = aurApp(pkg = "zen-browser", aurPath = "/cgit/aur.git/snapshot/zen-browser.tar.gz")
+        .copy(name = "Zen Browser")
 
     @Test fun aurAppQueuesAurJob() {
         val job = StoreInstalls.storeJobFor(aurApp(), Distro.ARCH)
@@ -115,5 +119,33 @@ class ArchStoreWiringTest {
     fun archX8664GetsPacmanScriptAndOverlays() = runBlocking {
         assertEquals(PacmanScript, PackageScript.forDistro(Distro.ARCH_X86_64))
         assertTrue(ArchPackages.packagesFor(Distro.ARCH_X86_64).guiHelpers.isNotEmpty())
+    }
+
+    @Test fun zenAurEntryRoutesToTheOfficialPrebuiltOnArch() {
+        val script = StoreInstalls.prebuiltScriptFor(zenApp(), Distro.ARCH)!!
+        assertTrue("zen.linux-aarch64.tar.xz" in script)
+        val job = StoreInstalls.storeJobFor(zenApp(), Distro.ARCH)
+        assertFalse(job.aur)
+        assertEquals(script, job.prebuiltScript)
+        val x86 = StoreInstalls.storeJobFor(zenApp(), Distro.ARCH_X86_64)
+        assertFalse(x86.aur)
+        assertTrue("zen.linux-x86_64.tar.xz" in x86.prebuiltScript!!)
+    }
+
+    @Test fun otherAurAppsAndDebianKeepTheMakepkgPipeline() {
+        assertNull(StoreInstalls.prebuiltScriptFor(aurApp(), Distro.ARCH))
+        assertNull(StoreInstalls.prebuiltScriptFor(zenApp(), Distro.DEBIAN))
+        val job = StoreInstalls.storeJobFor(aurApp(), Distro.ARCH)
+        assertTrue(job.aur)
+        assertNull(job.prebuiltScript)
+        assertFalse(StoreInstalls.storeJobFor(aurApp(), Distro.DEBIAN).aur)
+    }
+
+    @Test fun zenInstallCopyDescribesThePrebuiltInsteadOfMakepkg() {
+        val copy = StoreInstalls.installCopy(zenApp(), false)
+        assertTrue("Zen Browser" in copy)
+        assertTrue("prebuilt" in copy)
+        assertFalse("makepkg" in copy)
+        assertTrue("makepkg" in StoreInstalls.installCopy(aurApp(), false))
     }
 }

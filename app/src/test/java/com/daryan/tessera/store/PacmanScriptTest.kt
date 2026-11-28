@@ -90,4 +90,17 @@ class PacmanScriptTest {
         assertTrue("cd /" in script)
         assertTrue(script.indexOf("cd /") < script.indexOf("rm -rf ${PacmanScript.AUR_DIR}"))
     }
+
+    @Test fun zenPrebuiltJobDoesNotFallIntoTheAurBuildPipeline() {
+        // Routing sets aur=false and supplies a root script, so PacmanScript's plain repo path
+        // is the fallback if a script ever goes missing: never a makepkg/fakeroot build.
+        val job = QueueJob(
+            id = 7, title = "Zen Browser", packages = listOf("zen-browser"),
+            action = QueueAction.INSTALL, iconFile = null,
+        )
+        val script = PacmanScript.script(job)
+        assertTrue("pacman -S --noconfirm --needed zen-browser" in script)
+        assertFalse("makepkg" in script)
+        assertFalse("fakeroot" in script)
+    }
 }
