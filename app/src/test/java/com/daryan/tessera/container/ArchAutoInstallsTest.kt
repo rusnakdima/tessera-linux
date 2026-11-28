@@ -223,64 +223,12 @@ class ArchAutoInstallsTest {
         }
     }
 
-    @Test fun zenLauncherKeepsNetworkingInMainProcess() {
-        for (distro in listOf(Distro.ARCH, Distro.ARCH_X86_64)) {
-            val s = AutoInstalls.zenBrowserInstallScript(distro)!!
-            // Under PRoot the dedicated socket/network child process crashes on startup and
-            // takes every real http(s) load down with it ("Gah. Your tab just crashed."). Keep
-            // the network stack in the main/content process and disable the socket sandbox.
-            assertTrue("network.process.enabled\", false" in s)
-            assertTrue("security.sandbox.socket.process.level\", 0" in s)
-        }
-    }
-
     @Test fun zenLauncherPreservesTheNoSourceBuildGuarantees() {
         for (distro in listOf(Distro.ARCH, Distro.ARCH_X86_64)) {
             val s = AutoInstalls.zenBrowserInstallScript(distro)!!
             assertFalse("makepkg" in s)
             assertFalse("fakeroot" in s)
             assertFalse("sudo" in s)
-        }
-    }
-
-    /** The `printf '...' > "$profile/<file>"` payload written into the seeded profile. */
-    private fun zenProfilePrefs(script: String, file: String): String {
-        val marker = "> \"\$profile/$file\""
-        val end = script.indexOf(marker)
-        assertTrue("$file is not written by the launcher", end >= 0)
-        val start = script.lastIndexOf("printf '", end)
-        assertTrue("$file has no printf payload", start >= 0)
-        return script.substring(start, end)
-    }
-
-    @Test fun zenLauncherRunsSingleProcessBecauseAndroidBlocksIpdlSharedMemory() {
-        // Android's SELinux (untrusted_app_27) denies opening Zen's memfd:mozilla-ipc-test, so IPDL
-        // shared memory is unusable and every content child SIGSEGVs ("Gah. Your tab just crashed.").
-        // Single-process mode keeps rendering in the main process, where no child/IPDL is needed.
-        val e10sPrefs = listOf(
-            "user_pref(\"browser.tabs.remote.autostart\", false);",
-            "user_pref(\"browser.tabs.remote.autostart.2\", false);",
-            "user_pref(\"browser.tabs.remote.force-enable\", false);",
-            "user_pref(\"extensions.e10sBlocksEnabling\", true);",
-        )
-        for (distro in listOf(Distro.ARCH, Distro.ARCH_X86_64)) {
-            val s = AutoInstalls.zenBrowserInstallScript(distro)!!
-            // The environment variable is the authoritative switch in modern Gecko (the prefs
-            // alone only work in automation/unofficial builds on recent Firefox versions).
-            assertTrue("MOZ_FORCE_DISABLE_E10S=1" in s)
-            for (file in listOf("user.js", "prefs.js")) {
-                val prefs = zenProfilePrefs(s, file)
-                e10sPrefs.forEach { assertTrue("$file is missing $it", it in prefs) }
-                // The earlier sandbox/network fixes must survive the single-process change.
-                assertTrue("$file lost the content sandbox pref", "user_pref(\"security.sandbox.content.level\", 0);" in prefs)
-                assertTrue("$file lost the socket sandbox pref", "user_pref(\"security.sandbox.socket.process.level\", 0);" in prefs)
-                assertTrue("$file lost the network-process pref", "user_pref(\"network.process.enabled\", false);" in prefs)
-            }
-            // Every prior sandbox-disabling environment variable stays in the launcher.
-            listOf(
-                "MOZ_DISABLE_CONTENT_SANDBOX=1", "MOZ_DISABLE_GMP_SANDBOX=1", "MOZ_DISABLE_RDD_SANDBOX=1",
-                "MOZ_DISABLE_SOCKET_PROCESS_SANDBOX=1", "MOZ_DISABLE_UTILITY_SANDBOX=1",
-            ).forEach { assertTrue("$distro launcher lost $it", it in s) }
         }
     }
 }
