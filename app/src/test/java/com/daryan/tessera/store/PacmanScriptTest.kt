@@ -80,4 +80,14 @@ class PacmanScriptTest {
         )
         assertEquals(InstallQueue.script(job), AptScript.script(job))
     }
+
+    @Test fun aurScriptLeavesBuildDirectoryBeforeDeletingIt() {
+        val job = QueueJob(
+            id = 6, title = "yay", packages = listOf("yay"),
+            action = QueueAction.INSTALL, iconFile = null, aur = true,
+        )
+        val script = PacmanScript.script(job)
+        assertTrue("cd /" in script)
+        assertTrue(script.indexOf("cd /") < script.indexOf("rm -rf ${PacmanScript.AUR_DIR}"))
+    }
 }

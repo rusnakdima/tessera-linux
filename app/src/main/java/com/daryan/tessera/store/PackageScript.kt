@@ -163,7 +163,8 @@ object PacmanScript : PackageScript {
         val deps = """runuser -u user -- makepkg --printsrcinfo | """ +
             """sed -n -E 's/^[[:space:]]*(depends|makedepends)[[:space:]]*=[[:space:]]*([^<>=]+).*/\2/p' | """ +
             """sort -u | tr '\n' ' '"""
-        return "pacman -S --noconfirm --needed base-devel git && " +
+        // A previous job may have left the shell inside $AUR_DIR; leave it before deleting it.
+        return "cd / && pacman -S --noconfirm --needed base-devel git && " +
             "(id -u user >/dev/null 2>&1 || useradd -m -u 10000 user) && " +
             "rm -rf $AUR_DIR && mkdir -p $AUR_DIR && chown user:user $AUR_DIR && " +
             "runuser -u user -- git clone --depth 1 $repo $dir && " +
