@@ -30,7 +30,7 @@ class PacmanScriptTest {
             action = QueueAction.INSTALL, iconFile = null, aur = true,
         )
         val script = PacmanScript.script(job)
-        assertTrue("runuser -u user -- makepkg -s" in script)
+        assertTrue("runuser -u user -- makepkg -d" in script)
         assertTrue("pacman -U --noconfirm" in script)
         assertTrue("base-devel" in script && "git" in script)
         assertFalse("apt-get" in script)
@@ -49,7 +49,7 @@ class PacmanScriptTest {
         assertTrue("${PacmanScript.AUR_DIR}/'evil; rm -rf /'" in script)
     }
 
-    @Test fun aurBuildCreatesUserAndLetsMakepkgInstallDependencies() {
+    @Test fun aurBuildInstallsDependenciesAsRootWithoutSudo() {
         val job = QueueJob(
             id = 5, title = "yay", packages = listOf("yay"),
             action = QueueAction.INSTALL, iconFile = null, aur = true,
@@ -58,11 +58,13 @@ class PacmanScriptTest {
         // Root install jobs skip enter.sh's user setup; chown would fail without this.
         assertTrue("id -u user >/dev/null 2>&1 || useradd" in script)
         assertTrue(script.indexOf("id -u user") < script.indexOf("chown user:user"))
-        // makepkg -s calls sudo pacman for dependencies outside base-devel.
-        assertTrue("sudo" in script)
-        assertTrue("/etc/sudoers.d/tessera-aur" in script)
-        assertTrue("NOPASSWD: /usr/bin/pacman" in script)
-        assertTrue(script.indexOf("tessera-aur") < script.indexOf("makepkg -s"))
+        // sudo's PAM check fails in the container, so no sudo at any point.
+        assertFalse("sudo" in script)
+        assertFalse("sudoers" in script)
+        // Dependencies come from the PKGBUILD and are installed as root before the build.
+        assertTrue("makepkg --printsrcinfo" in script)
+        assertTrue("pacman -S --noconfirm --needed \$deps" in script)
+        assertTrue(script.indexOf("pacman -S --noconfirm --needed \$deps") < script.indexOf("makepkg -d"))
     }
 
     @Test fun aurFailureKeepsMakepkgOutput() {

@@ -148,7 +148,7 @@ object PacmanScript : PackageScript {
 
     /**
      * `pkgbase` is the one package name, and it comes from the AUR, so it's shell-quoted. The
-     * clone and the build run as `user`; the base-devel install and `pacman -U` run as root.
+     * clone and the build run as `user`; every dependency install and `pacman -U` run as root.
      */
     private fun aurScript(job: QueueJob): String {
         require(job.packages.size == 1) {
@@ -158,15 +158,18 @@ object PacmanScript : PackageScript {
         val repo = shellQuote("https://aur.archlinux.org/$pkgbase.git")
         val dir = "$AUR_DIR/${shellQuote(pkgbase)}"
         // Root install jobs skip enter.sh's user setup, so create the builder if it isn't there.
-        // makepkg -s uses sudo for dependencies outside base-devel; the narrow drop-in lets it
-        // call pacman without a password, and nothing else.
-        return "pacman -S --noconfirm --needed base-devel git sudo && " +
+        // makepkg -s calls sudo for dependencies outside base-devel, but sudo has no working
+        // PAM auth in the container. Read the exact dependencies from .SRCINFO instead.
+        val deps = """runuser -u user -- makepkg --printsrcinfo | """ +
+            """sed -n -E 's/^[[:space:]]*(depends|makedepends)[[:space:]]*=[[:space:]]*([^<>=]+).*/\2/p' | """ +
+            """sort -u | tr '\n' ' '"""
+        return "pacman -S --noconfirm --needed base-devel git && " +
             "(id -u user >/dev/null 2>&1 || useradd -m -u 10000 user) && " +
-            "printf '%s\\n' 'user ALL=(root) NOPASSWD: /usr/bin/pacman' > /etc/sudoers.d/tessera-aur && " +
-            "chmod 440 /etc/sudoers.d/tessera-aur && " +
             "rm -rf $AUR_DIR && mkdir -p $AUR_DIR && chown user:user $AUR_DIR && " +
             "runuser -u user -- git clone --depth 1 $repo $dir && " +
-            "cd $dir && runuser -u user -- makepkg -s --noconfirm && " +
+            "cd $dir && deps=\$($deps) && " +
+            "[ -z \"\$deps\" ] || pacman -S --noconfirm --needed \$deps && " +
+            "runuser -u user -- makepkg -d --noconfirm && " +
             "pacman -U --noconfirm $dir/*.pkg.tar.*"
     }
 }
