@@ -33,4 +33,14 @@ object AutoInstalls {
     /** ADB and fastboot: Arch ships both in `android-tools`. */
     fun adb(distro: Distro): List<String> =
         if (distro.isArch) listOf("android-tools") else PhoneAdb.PACKAGES
+
+    /**
+     * AUR helpers built from the AUR after an Arch setup, in pacman's DB names. There is no
+     * Debian equivalent: apt's stores and helpers were never built from source this way.
+     */
+    val aurHelpers: List<String> = listOf("yay", "paru")
+
+    /** AUR helpers [installed] lacks; empty on Debian, where nothing is built from the AUR. */
+    fun missingAurHelpers(distro: Distro, installed: Set<String>): List<String> =
+        if (distro.isArch) aurHelpers.filterNot { it in installed } else emptyList()
 }

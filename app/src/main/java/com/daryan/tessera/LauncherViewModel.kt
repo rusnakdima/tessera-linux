@@ -699,6 +699,8 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
                     return@launch
                 }
                 val restored = !restoreLimit || withContext(Dispatchers.IO) { PhantomLimit.restore(su) }
+                // A reinstall is a fresh setup: check its AUR helpers again.
+                container.aurHelpersChecked.clear()
                 _messages.send(if (restored) "Linux is removed from chroot mode" else "Linux is removed, but Android's process limit couldn't be put back")
             } finally {
                 _removingLinux.value = false
@@ -797,6 +799,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
             // Whatever happened, the system isn't what it was: look again.
             container.baseLibrariesChecked.clear()
             container.guiHelpersChecked.clear()
+            container.aurHelpersChecked.clear()
             refresh()
         }
     }
@@ -890,6 +893,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
             }
             addBaseLibraries()
             addMissingGuiHelpers()
+            addAurHelpers()
             configStore(_status.value, _mode.value)?.let { container.registry.refreshInstalled(it, container.distro) }
             scanSystemApps(force = true)
         }
@@ -932,6 +936,26 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         if (missing.isEmpty()) return
         container.queue.enqueue("Sound, keyboard and theme helpers", missing, QueueAction.INSTALL, null, backend, optional = missing.toSet(), fallback = debianFallback()) {
             container.registry.refreshInstalled(store, container.distro)
+        }
+    }
+
+    /**
+     * Arch's AUR helpers are built from the AUR once, right after Setup installs the rootfs, and
+     * then AUR apps can be installed from the Store. Debian has no AUR, so it queues nothing here.
+     * Each helper is its own job: the AUR build takes one package at a time.
+     */
+    private suspend fun addAurHelpers() {
+        if (!container.distro.isArch) return
+        if (checkKey() in container.aurHelpersChecked) return
+        val store = configStore(_status.value, _mode.value) ?: return
+        val backend = backend() ?: return
+        container.aurHelpersChecked += checkKey()
+        container.registry.refreshInstalled(store, container.distro)
+        val installed = container.registry.installed.value ?: return
+        AutoInstalls.missingAurHelpers(container.distro, installed).forEach { helper ->
+            container.queue.enqueue("AUR helper ($helper)", listOf(helper), QueueAction.INSTALL, null, backend, aur = true) {
+                container.registry.refreshInstalled(store, container.distro)
+            }
         }
     }
 

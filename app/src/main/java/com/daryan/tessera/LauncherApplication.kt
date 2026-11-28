@@ -192,6 +192,8 @@ class LauncherContainer(private val app: Application) {
     val guiHelpersChecked: MutableSet<String> = java.util.Collections.synchronizedSet(mutableSetOf())
     /** The modes already checked for missing base libraries ([BASE_LIBRARIES]) this run. */
     val baseLibrariesChecked: MutableSet<String> = java.util.Collections.synchronizedSet(mutableSetOf())
+    /** The modes already checked for AUR helpers after an Arch setup this run. */
+    val aurHelpersChecked: MutableSet<String> = java.util.Collections.synchronizedSet(mutableSetOf())
 
     /** Looks for newer versions of Tessera among its releases. */
     val updates = UpdateChecker(app, scope)
