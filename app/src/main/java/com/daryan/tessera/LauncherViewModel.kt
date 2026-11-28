@@ -940,9 +940,9 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Arch's AUR helpers are built from the AUR once, right after Setup installs the rootfs, and
-     * then AUR apps can be installed from the Store. Debian has no AUR, so it queues nothing here.
-     * Each helper is its own job: the AUR build takes one package at a time.
+     * Arch's AUR helpers are installed once, right after Setup installs the rootfs, from their
+     * upstream prebuilt release binaries (a makepkg/fakeroot build can't run in the PRoot guest).
+     * Debian has no AUR, so it queues nothing here. Each helper is its own root script job.
      */
     private suspend fun addAurHelpers() {
         if (!container.distro.isArch) return
@@ -953,7 +953,8 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         container.registry.refreshInstalled(store, container.distro)
         val installed = container.registry.installed.value ?: return
         AutoInstalls.missingAurHelpers(container.distro, installed).forEach { helper ->
-            container.queue.enqueue("AUR helper ($helper)", listOf(helper), QueueAction.INSTALL, null, backend, aur = true) {
+            val script = AutoInstalls.aurHelperInstallScript(helper, container.distro) ?: return@forEach
+            container.queue.enqueue("AUR helper ($helper)", listOf(helper), QueueAction.INSTALL, null, backend, script = script) {
                 container.registry.refreshInstalled(store, container.distro)
             }
         }
