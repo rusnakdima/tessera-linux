@@ -153,14 +153,16 @@ object AutoInstalls {
             tar -xJf "${'$'}tmp/asset" -C /opt/zen-browser --strip-components=1
             # Firefox's per-process sandboxes install seccomp filters that clash with PRoot's
             # ptrace, and running the browser as root leaves its content processes crashing
-            # ("Gah. Your tab just crashed."). The launcher below drops to the container's
-            # unprivileged user with every sandbox off. Tessera's GUI wrapper only writes a
-            # user.js into Firefox's ~/.mozilla profiles, never Zen's ~/.zen/<hash> one, so
-            # seed a fixed profile with the authoritative sandbox pref here, owned by that user.
+            # ("Gah. Your tab just crashed."). PRoot also cannot host the dedicated socket/network
+            # child process, so keep networking in the main/content process and drop that sandbox
+            # too. The launcher below drops to the container's unprivileged user with every sandbox
+            # off. Tessera's GUI wrapper only writes a user.js into Firefox's ~/.mozilla profiles,
+            # never Zen's ~/.zen/<hash> one, so seed a fixed profile with the authoritative prefs
+            # here, owned by that user.
             profile=/home/user/.zen-tessera
             mkdir -p "${'$'}profile"
-            printf 'user_pref("security.sandbox.content.level", 0);\nuser_pref("gfx.webrender.all", false);\nuser_pref("layers.acceleration.force-enabled", false);\n' > "${'$'}profile/user.js"
-            printf 'user_pref("security.sandbox.content.level", 0);\n' > "${'$'}profile/prefs.js"
+            printf 'user_pref("security.sandbox.content.level", 0);\nuser_pref("security.sandbox.socket.process.level", 0);\nuser_pref("network.process.enabled", false);\nuser_pref("gfx.webrender.all", false);\nuser_pref("layers.acceleration.force-enabled", false);\n' > "${'$'}profile/user.js"
+            printf 'user_pref("security.sandbox.content.level", 0);\nuser_pref("security.sandbox.socket.process.level", 0);\nuser_pref("network.process.enabled", false);\n' > "${'$'}profile/prefs.js"
             chown -R user:user "${'$'}profile"
             cat > "${'$'}tmp/zen-browser" <<'ZENLAUNCH'
             #!/bin/sh

@@ -223,6 +223,17 @@ class ArchAutoInstallsTest {
         }
     }
 
+    @Test fun zenLauncherKeepsNetworkingInMainProcess() {
+        for (distro in listOf(Distro.ARCH, Distro.ARCH_X86_64)) {
+            val s = AutoInstalls.zenBrowserInstallScript(distro)!!
+            // Under PRoot the dedicated socket/network child process crashes on startup and
+            // takes every real http(s) load down with it ("Gah. Your tab just crashed."). Keep
+            // the network stack in the main/content process and disable the socket sandbox.
+            assertTrue("network.process.enabled\", false" in s)
+            assertTrue("security.sandbox.socket.process.level\", 0" in s)
+        }
+    }
+
     @Test fun zenLauncherPreservesTheNoSourceBuildGuarantees() {
         for (distro in listOf(Distro.ARCH, Distro.ARCH_X86_64)) {
             val s = AutoInstalls.zenBrowserInstallScript(distro)!!
