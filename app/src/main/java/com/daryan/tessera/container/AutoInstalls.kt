@@ -156,19 +156,25 @@ object AutoInstalls {
             # ("Gah. Your tab just crashed."). PRoot also cannot host the dedicated socket/network
             # child process, so keep networking in the main/content process and drop that sandbox
             # too. The launcher below drops to the container's unprivileged user with every sandbox
-            # off. Tessera's GUI wrapper only writes a user.js into Firefox's ~/.mozilla profiles,
+            # off. Android's SELinux (untrusted_app_27) also denies opening the memfd Zen uses for
+            # IPDL shared memory, so every content child SIGSEGVs on real http(s) pages; run Zen in
+            # single-process mode (E10S off) to keep rendering in the main process instead.
+            # Tessera's GUI wrapper only writes a user.js into Firefox's ~/.mozilla profiles,
             # never Zen's ~/.zen/<hash> one, so seed a fixed profile with the authoritative prefs
             # here, owned by that user.
             profile=/home/user/.zen-tessera
             mkdir -p "${'$'}profile"
-            printf 'user_pref("security.sandbox.content.level", 0);\nuser_pref("security.sandbox.socket.process.level", 0);\nuser_pref("network.process.enabled", false);\nuser_pref("gfx.webrender.all", false);\nuser_pref("layers.acceleration.force-enabled", false);\n' > "${'$'}profile/user.js"
-            printf 'user_pref("security.sandbox.content.level", 0);\nuser_pref("security.sandbox.socket.process.level", 0);\nuser_pref("network.process.enabled", false);\n' > "${'$'}profile/prefs.js"
+            printf 'user_pref("security.sandbox.content.level", 0);\nuser_pref("security.sandbox.socket.process.level", 0);\nuser_pref("network.process.enabled", false);\nuser_pref("browser.tabs.remote.autostart", false);\nuser_pref("browser.tabs.remote.autostart.2", false);\nuser_pref("browser.tabs.remote.force-enable", false);\nuser_pref("extensions.e10sBlocksEnabling", true);\nuser_pref("gfx.webrender.all", false);\nuser_pref("layers.acceleration.force-enabled", false);\n' > "${'$'}profile/user.js"
+            printf 'user_pref("security.sandbox.content.level", 0);\nuser_pref("security.sandbox.socket.process.level", 0);\nuser_pref("network.process.enabled", false);\nuser_pref("browser.tabs.remote.autostart", false);\nuser_pref("browser.tabs.remote.autostart.2", false);\nuser_pref("browser.tabs.remote.force-enable", false);\nuser_pref("extensions.e10sBlocksEnabling", true);\n' > "${'$'}profile/prefs.js"
             chown -R user:user "${'$'}profile"
             cat > "${'$'}tmp/zen-browser" <<'ZENLAUNCH'
             #!/bin/sh
             # Tessera: PRoot can't host Firefox's sandboxes and root breaks Zen's content
             # processes, so run as the unprivileged guest user with the sandboxes disabled
             # and CPU rendering. The account variables are pinned for either branch below.
+            # Android's SELinux blocks the memfd Zen uses for IPDL shared memory, killing every
+            # child process: MOZ_FORCE_DISABLE_E10S keeps the browser in a single process.
+            export MOZ_FORCE_DISABLE_E10S=1
             export MOZ_DISABLE_CONTENT_SANDBOX=1
             export MOZ_DISABLE_GMP_SANDBOX=1
             export MOZ_DISABLE_RDD_SANDBOX=1
