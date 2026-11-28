@@ -151,7 +151,40 @@ object AutoInstalls {
             # The only top-level member is zen/, so strip it; no symlinks to chmod in PRoot.
             mkdir -p /opt/zen-browser
             tar -xJf "${'$'}tmp/asset" -C /opt/zen-browser --strip-components=1
-            printf '#!/bin/sh\nexec /opt/zen-browser/zen "${'$'}@"\n' > "${'$'}tmp/zen-browser"
+            # Firefox's per-process sandboxes install seccomp filters that clash with PRoot's
+            # ptrace, and running the browser as root leaves its content processes crashing
+            # ("Gah. Your tab just crashed."). The launcher below drops to the container's
+            # unprivileged user with every sandbox off. Tessera's GUI wrapper only writes a
+            # user.js into Firefox's ~/.mozilla profiles, never Zen's ~/.zen/<hash> one, so
+            # seed a fixed profile with the authoritative sandbox pref here, owned by that user.
+            profile=/home/user/.zen-tessera
+            mkdir -p "${'$'}profile"
+            printf 'user_pref("security.sandbox.content.level", 0);\nuser_pref("gfx.webrender.all", false);\nuser_pref("layers.acceleration.force-enabled", false);\n' > "${'$'}profile/user.js"
+            printf 'user_pref("security.sandbox.content.level", 0);\n' > "${'$'}profile/prefs.js"
+            chown -R user:user "${'$'}profile"
+            cat > "${'$'}tmp/zen-browser" <<'ZENLAUNCH'
+            #!/bin/sh
+            # Tessera: PRoot can't host Firefox's sandboxes and root breaks Zen's content
+            # processes, so run as the unprivileged guest user with the sandboxes disabled
+            # and CPU rendering. The account variables are pinned for either branch below.
+            export MOZ_DISABLE_CONTENT_SANDBOX=1
+            export MOZ_DISABLE_GMP_SANDBOX=1
+            export MOZ_DISABLE_RDD_SANDBOX=1
+            export MOZ_DISABLE_SOCKET_PROCESS_SANDBOX=1
+            export MOZ_DISABLE_UTILITY_SANDBOX=1
+            export LIBGL_ALWAYS_SOFTWARE=1
+            export MOZ_ACCELERATED=0
+            export HOME=/home/user
+            export USER=user
+            export LOGNAME=user
+            # A normal PRoot session already runs as the container's unprivileged `user` (its
+            # uid is Tessera's own); runuser rejects a non-root caller, so only drop when a
+            # root session actually started us. Both branches use the pref-seeded profile.
+            if [ "${'$'}(id -u)" = 0 ]; then
+                exec runuser -u user -- /opt/zen-browser/zen -profile /home/user/.zen-tessera "${'$'}@"
+            fi
+            exec /opt/zen-browser/zen -profile /home/user/.zen-tessera "${'$'}@"
+            ZENLAUNCH
             install -m 755 "${'$'}tmp/zen-browser" /usr/bin/zen-browser
             cat > "${'$'}tmp/zen-browser.desktop" <<'EOF'
             [Desktop Entry]

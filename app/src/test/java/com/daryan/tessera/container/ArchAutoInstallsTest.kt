@@ -181,4 +181,54 @@ class ArchAutoInstallsTest {
             assertEquals(out, 0, p.waitFor())
         }
     }
+
+    @Test fun zenLauncherDropsToUnprivilegedUserAndHome() {
+        for (distro in listOf(Distro.ARCH, Distro.ARCH_X86_64)) {
+            val s = AutoInstalls.zenBrowserInstallScript(distro)!!
+            // Root's Firefox disables its content sandbox and its content processes die under
+            // PRoot; the generated launcher must hand the browser to the container's normal user.
+            assertTrue("runuser -u user --" in s)
+            assertTrue("HOME=/home/user" in s)
+            assertTrue("/opt/zen-browser/zen" in s)
+            // A fixed profile carries the pref below, since Zen's ~/.zen/<hash> profile is not
+            // one Tessera's GUI wrapper already configures; it is chowned so that user can write.
+            assertTrue("-profile /home/user/.zen-tessera" in s)
+            assertTrue("chown -R user:user" in s)
+            // A normal PRoot session is already the unprivileged user; runuser must be guarded
+            // by a root check or it aborts with "runuser: may not be used by non-root users".
+            assertTrue("id -u" in s)
+        }
+    }
+
+    @Test fun zenLauncherDisablesEveryContentSandboxAndPref() {
+        for (distro in listOf(Distro.ARCH, Distro.ARCH_X86_64)) {
+            val s = AutoInstalls.zenBrowserInstallScript(distro)!!
+            assertTrue("MOZ_DISABLE_CONTENT_SANDBOX=1" in s)
+            assertTrue("MOZ_DISABLE_GMP_SANDBOX=1" in s)
+            assertTrue("MOZ_DISABLE_RDD_SANDBOX=1" in s)
+            assertTrue("MOZ_DISABLE_SOCKET_PROCESS_SANDBOX=1" in s)
+            // The pref is authoritative: the env alone still leaves Zen's content processes
+            // trying to start an unsupported sandbox and crashing with "Gah. Your tab just crashed."
+            assertTrue("security.sandbox.content.level\", 0" in s)
+            assertTrue("user.js" in s)
+            assertTrue("prefs.js" in s)
+        }
+    }
+
+    @Test fun zenLauncherForcesSoftwareRendering() {
+        for (distro in listOf(Distro.ARCH, Distro.ARCH_X86_64)) {
+            val s = AutoInstalls.zenBrowserInstallScript(distro)!!
+            assertTrue("LIBGL_ALWAYS_SOFTWARE=1" in s)
+            assertTrue("MOZ_ACCELERATED=0" in s)
+        }
+    }
+
+    @Test fun zenLauncherPreservesTheNoSourceBuildGuarantees() {
+        for (distro in listOf(Distro.ARCH, Distro.ARCH_X86_64)) {
+            val s = AutoInstalls.zenBrowserInstallScript(distro)!!
+            assertFalse("makepkg" in s)
+            assertFalse("fakeroot" in s)
+            assertFalse("sudo" in s)
+        }
+    }
 }
